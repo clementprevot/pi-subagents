@@ -2734,4 +2734,116 @@ describe("scripted workflow runtime", () => {
 		assert.ok(children.every((child) => child.ok), "every child should still report success");
 		assert.equal(result.children.filter((child) => !child.ok).length, 0);
 	});
+
+	it("notifies onChildSettled for each child as it completes while workflow runs", async () => {
+		const settledNotifications: Array<{ childKey: string; outcome: string; workflowRunning: boolean }> = [];
+		let releaseB: () => void;
+		const bBlocked = new Promise<void>((resolve) => { releaseB = resolve; });
+		let aSettledBeforeBReleased = false;
+
+		const result = await runWorkflowScript({
+			workflowRunId: "test-workflow-1",
+			script: `return await runs.all([
+				{ key: "child-a", agent: "worker", task: "task-a" },
+				{ key: "child-b", agent: "worker", task: "task-b" }
+			]);`,
+			timeoutMs: 5_000,
+			onChildSettled(notification) {
+				settledNotifications.push({
+					childKey: notification.childKey,
+					outcome: notification.outcome,
+					workflowRunning: notification.workflowRunning,
+				});
+				if (notification.childKey === "child-a" && notification.workflowRunning) {
+					aSettledBeforeBReleased = true;
+					releaseB!();
+				}
+			},
+			async launch(key) {
+				if (key === "child-a") {
+					return { key, ok: true, runId: "run-a-123", output: "A done", outputReference: "/tmp/a.txt", artifactPaths: ["/tmp/a.txt"] };
+				}
+				await bBlocked;
+				return { key, ok: true, runId: "run-b-456", output: "B done", outputReference: "/tmp/b.txt", artifactPaths: ["/tmp/b.txt"] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(aSettledBeforeBReleased, true, "A should settle and notify before B is released");
+		assert.equal(settledNotifications.length, 2, "should receive exactly 2 notifications");
+
+		const notificationA = settledNotifications.find((n) => n.childKey === "child-a");
+		assert.ok(notificationA, "should have notification for child-a");
+		assert.equal(notificationA!.outcome, "completed");
+		assert.equal(notificationA!.workflowRunning, true, "workflow should be running when A notifies");
+
+		const notificationB = settledNotifications.find((n) => n.childKey === "child-b");
+		assert.ok(notificationB, "should have notification for child-b");
+		assert.equal(notificationB!.outcome, "completed");
+		assert.equal(notificationB!.workflowRunning, true, "workflow script is still running when last child notifies");
+
+		assert.deepEqual((result.value as Array<{ key: string }>).map(({ key }) => key), ["child-a", "child-b"]);
+	});
+
+	it("notifies onChildSettled with correct outcome for failed children", async () => {
+		const settledNotifications: Array<{ childKey: string; outcome: string; error?: string }> = [];
+
+		const result = await runWorkflowScript({
+			workflowRunId: "test-workflow-2",
+			script: `return await runs.all([
+				{ key: "success-child", agent: "worker", task: "succeed" },
+				{ key: "failed-child", agent: "worker", task: "fail" }
+			]);`,
+			timeoutMs: 5_000,
+			onChildSettled(notification) {
+				settledNotifications.push({
+					childKey: notification.childKey,
+					outcome: notification.outcome,
+					...(notification.error ? { error: notification.error } : {}),
+				});
+			},
+			async launch(key) {
+				if (key === "success-child") {
+					return { key, ok: true, runId: "run-success", output: "Success", artifactPaths: [] };
+				}
+				return { key, ok: false, runId: "run-failed", output: "Failed", error: "Task failed", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(settledNotifications.length, 2);
+
+		const successNotification = settledNotifications.find((n) => n.childKey === "success-child");
+		assert.ok(successNotification);
+		assert.equal(successNotification!.outcome, "completed");
+
+		const failedNotification = settledNotifications.find((n) => n.childKey === "failed-child");
+		assert.ok(failedNotification);
+		assert.equal(failedNotification!.outcome, "failed");
+		assert.equal(failedNotification!.error, "Task failed");
+	});
+
+	it("deduplicates onChildSettled notifications by child key and run ID", async () => {
+		const settledNotifications: Array<{ childKey: string; childRunId?: string }> = [];
+
+		await runWorkflowScript({
+			workflowRunId: "test-workflow-3",
+			script: `return await runs.run("single-child", { agent: "worker", task: "run once" });`,
+			timeoutMs: 5_000,
+			onChildSettled(notification) {
+				settledNotifications.push({
+					childKey: notification.childKey,
+					...(notification.childRunId ? { childRunId: notification.childRunId } : {}),
+				});
+			},
+			async launch(key) {
+				return { key, ok: true, runId: "unique-run-id", output: "Done", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(settledNotifications.length, 1, "should receive exactly 1 notification per child");
+		assert.equal(settledNotifications[0]!.childKey, "single-child");
+		assert.equal(settledNotifications[0]!.childRunId, "unique-run-id");
+	});
 });

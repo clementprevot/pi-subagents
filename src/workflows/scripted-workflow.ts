@@ -1099,8 +1099,22 @@ export class WorkflowScriptError extends Error {
 	}
 }
 
+export type WorkflowChildSettledOutcome = "completed" | "failed" | "paused" | "stopped";
+
+export interface WorkflowChildSettledNotification {
+	workflowRunId: string;
+	childKey: string;
+	childRunId?: string;
+	outcome: WorkflowChildSettledOutcome;
+	outputReference?: string;
+	error?: string;
+	workflowRunning: boolean;
+}
+
 export interface RunWorkflowScriptOptions {
 	script: string;
+	/** Workflow run ID for notifications. Required when onChildSettled is provided. */
+	workflowRunId?: string;
 	/** Host-only first-slice admission context. It is never sent to the workflow worker. */
 	oneUsePermit?: { claim: (key: string) => string | undefined };
 	timeoutMs?: number;
@@ -1124,6 +1138,7 @@ export interface RunWorkflowScriptOptions {
 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
 	onLanePlan?: (lanes: WorkflowLanePlan[]) => void;
 	onEmit?: (emits: unknown[]) => void;
+	onChildSettled?: (notification: WorkflowChildSettledNotification) => void;
 }
 
 function combinedAbortSignal(signals: AbortSignal[]): AbortSignal {
@@ -1812,6 +1827,30 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		traceChanged();
 		return true;
 	};
+	const notifyChildSettled = (key: string, result: WorkflowScriptChildResult): void => {
+		if (!options.onChildSettled || !options.workflowRunId) return;
+		const outcome: WorkflowChildSettledOutcome = result.ok
+			? "completed"
+			: result.stopped
+				? "stopped"
+				: result.detached
+					? "paused"
+					: "failed";
+		const outputReference = result.outputReference ?? result.artifactPaths[0];
+		try {
+			options.onChildSettled({
+				workflowRunId: options.workflowRunId,
+				childKey: key,
+				...(result.runId ? { childRunId: result.runId } : {}),
+				outcome,
+				...(outputReference ? { outputReference } : {}),
+				...(!result.ok && result.error ? { error: result.error } : {}),
+				workflowRunning: !settled && !finishing,
+			});
+		} catch (error) {
+			console.error("Workflow onChildSettled callback failed:", error);
+		}
+	};
 	options.registerStopChild?.(stopChild);
 
 	return await new Promise<WorkflowScriptResult>((resolve, reject) => {
@@ -2261,6 +2300,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				const state = normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
 				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok ? { error: normalized.error ?? normalized.output } : {}) });
 				traceChanged();
+				notifyChildSettled(key, normalized);
 				return normalized;
 			}, (error: unknown) => {
 				const text = error instanceof Error ? error.message : String(error);
@@ -2270,6 +2310,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				children.set(key, failure);
 				trace.push({ operation: "run", key, state: "failed", durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), error: text });
 				traceChanged();
+				notifyChildSettled(key, failure);
 				return failure;
 			});
 			launches.set(key, { fingerprint, promise, observed: callObserved, ...(generatedLaneKey ? { generatedLaneKey } : {}) });

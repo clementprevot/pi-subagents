@@ -54,6 +54,16 @@ export interface SubagentNotifyDetails {
 	watchdogBlockers?: SubagentNotifyWatchdogBlocker[];
 }
 
+export interface IncrementalChildCompletion {
+	workflowRunId: string;
+	childKey: string;
+	childRunId?: string;
+	outcome: "completed" | "failed" | "paused" | "stopped";
+	outputReference?: string;
+	error?: string;
+	workflowRunning: boolean;
+}
+
 export interface CompletionNotification {
 	[key: string]: unknown;
 	id?: string | null;
@@ -71,6 +81,7 @@ export interface CompletionNotification {
 	timedOut?: boolean;
 	stopped?: boolean;
 	turnBudgetExceeded?: boolean;
+	incrementalChildCompletion?: IncrementalChildCompletion;
 	results?: Array<{
 		runId?: string;
 		workflowKey?: string;
@@ -308,6 +319,22 @@ export function formatSingleCompletion(details: SubagentNotifyDetails): string {
 		.join("\n");
 }
 
+export function formatIncrementalChildCompletion(child: IncrementalChildCompletion): string {
+	const statusText = child.outcome === "completed" ? "completed"
+		: child.outcome === "failed" ? "failed"
+			: child.outcome === "paused" ? "paused (needs attention)"
+				: "stopped";
+	const workflowStatus = child.workflowRunning ? "workflow still running" : "workflow finished";
+	return [
+		`Workflow child ${statusText}: **${child.childKey}**`,
+		`Workflow run: ${child.workflowRunId}`,
+		...(child.childRunId ? [`Child run: ${child.childRunId}`] : []),
+		...(child.outputReference ? [`Output: ${child.outputReference}`] : []),
+		...(child.error ? [`Error: ${child.error}`] : []),
+		`Status: ${workflowStatus}`,
+	].join("\n");
+}
+
 export function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | undefined {
 	const lines = content.split("\n");
 	const match = (lines[0] ?? "").match(/^(Background task|Detached foreground task) (completed|failed|paused|stopped): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/);
@@ -460,6 +487,30 @@ function completionBatchKey(result: CompletionNotification): string {
 	if (sessionId) return `session:${sessionId}`;
 	const cwd = typeof result.cwd === "string" ? result.cwd.trim() : "";
 	return cwd ? `cwd:${cwd}` : "unknown";
+}
+
+function incrementalChildCompletionKey(child: IncrementalChildCompletion): string {
+	const parts = ["incremental-child", child.workflowRunId, child.childKey];
+	if (child.childRunId) parts.push(child.childRunId);
+	return parts.join(":");
+}
+
+function sendIncrementalChildCompletion(pi: Pick<ExtensionAPI, "sendMessage">, child: IncrementalChildCompletion): boolean {
+	const content = formatIncrementalChildCompletion(child);
+	const display = child.outcome !== "completed";
+	try {
+		pi.sendMessage(
+			{
+				customType: "subagent-incremental-child-notify",
+				content,
+				display,
+			},
+			{ triggerTurn: true },
+		);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 export function buildCompletionDetails(result: CompletionNotification): SubagentNotifyDetails {
@@ -649,6 +700,19 @@ export default function registerSubagentNotify(
 		} else if (!ownsResult(result.sessionId, result.completionOwnerId)) {
 			traceNotification("not_owned", result);
 			return Promise.resolve(false);
+		}
+		if (result.incrementalChildCompletion) {
+			const child = result.incrementalChildCompletion;
+			const childKey = incrementalChildCompletionKey(child);
+			const childSeenAt = seen.get(childKey);
+			if (childSeenAt !== undefined && now() - childSeenAt <= ttlMs) {
+				traceNotification("deduped_ttl", result);
+				return Promise.resolve(true);
+			}
+			if (childSeenAt !== undefined) seen.delete(childKey);
+			const sent = sendIncrementalChildCompletion(pi, child);
+			if (sent) markSeenWithTtl(seen, childKey, now(), ttlMs);
+			return Promise.resolve(sent);
 		}
 		if (result.intercomDelivered === true) {
 			traceNotification("intercom_delivered", result);

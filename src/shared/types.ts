@@ -238,6 +238,20 @@ export interface WorkflowReceipt {
 	recovery?: WorkflowRecoveryAction[];
 }
 
+export type IncrementalChildOutcome = "completed" | "failed" | "paused" | "stopped";
+
+export interface IncrementalWorkflowChildCompletion {
+	version: 1;
+	workflowRunId: string;
+	childKey: string;
+	childRunId?: string;
+	attemptId?: string;
+	outcome: IncrementalChildOutcome;
+	outputReference?: string;
+	error?: string;
+	workflowRunning: boolean;
+}
+
 export interface SavedOutputReference {
 	path: string;
 	bytes: number;

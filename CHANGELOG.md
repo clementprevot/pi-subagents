@@ -5,6 +5,7 @@
 ### Added
 - Add default-off, main-only watchdog questions and task-continuity reviews from bounded delivered orchestration evidence (#2010).
 - Add the built-in `evidence-auditor` for independently reviewing important research claims and source support. Thanks to [@Muskos](https://github.com/Muskos) for #2023.
+- Notify the parent as individual async workflow children finish, without waiting for all siblings (#2027). Each child completion delivers a compact notification with the workflow run ID, child key, exact child run ID, outcome, and output reference while the workflow remains running.
 
 ### Changed
 - Forked children keep their requested thinking level after signed Anthropic thinking blocks are stripped from the inherited transcript; fork context no longer forces thinking off for Anthropic-backed children. Requires a Pi host on 0.85.0 or newer, which recovers from signed-thinking mismatches on the transport. Thanks to [@hank-warren](https://github.com/hank-warren) for #2021.

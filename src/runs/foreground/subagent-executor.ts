@@ -114,7 +114,8 @@ import { createMissionWorkflowState } from "../../missions/workflow-state.ts";
 import { resolveAuthorityDecision } from "../../policy/authority.ts";
 import { handleHerdrInspectorAction, HERDR_INSPECTOR_ACTIONS } from "../../inspectors/herdr/actions.ts";
 import { handleHerdrProjectPaneAction, HERDR_PROJECT_PANE_ACTIONS } from "../../inspectors/herdr/project-panes.ts";
-import { previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError, type WorkflowLanePlan, type WorkflowReceiptResumeReference, type WorkflowScriptChildResult, type WorkflowScriptTraceEntry, type WorkflowSteerOptions, type WorkflowSteerResult } from "../../workflows/scripted-workflow.ts";
+import { previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError, type WorkflowChildSettledNotification, type WorkflowLanePlan, type WorkflowReceiptResumeReference, type WorkflowScriptChildResult, type WorkflowScriptTraceEntry, type WorkflowSteerOptions, type WorkflowSteerResult } from "../../workflows/scripted-workflow.ts";
+import { formatIncrementalChildCompletion } from "../background/notify.ts";
 import { executeWorkflowHostCommand, resolveWorkflowHostOutputClaimPath, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "../../workflows/host-command.ts";
 import { buildWorkflowReceipt, readWorkflowReceipt, workflowReceiptPath, resolveWorkflowReceiptResumeEntry, writeWorkflowReceipt, type WorkflowReceipt, type WorkflowReceiptState } from "../../workflows/workflow-receipt.ts";
 import { upsertHostStep, validHostStepNodes } from "../shared/host-step-status.ts";
@@ -5499,6 +5500,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					try {
 						const workflow = await runWorkflowScript({
 							script: workflowScript,
+							workflowRunId,
 							globalConcurrencyLimit: requestParams.globalConcurrencyLimit ?? deps.config.globalConcurrencyLimit,
 							timeoutMs: timeout,
 							signal: controller.signal,
@@ -5514,6 +5516,29 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							},
 							...(workflowState ? { state: workflowState } : {}),
 							onTrace: updateTrace,
+							onChildSettled: (notification) => {
+								appendWorkflowEvent({
+									type: "subagent.workflow.child_settled",
+									childKey: notification.childKey,
+									...(notification.childRunId ? { childRunId: notification.childRunId } : {}),
+									outcome: notification.outcome,
+									workflowRunning: notification.workflowRunning,
+								});
+								const step = status.steps?.find((s) => s.workflowKey === notification.childKey);
+								try {
+									deps.pi.sendMessage(
+										{
+											customType: "subagent-incremental-child-notify",
+											content: formatIncrementalChildCompletion(notification),
+											display: notification.outcome !== "completed",
+										},
+										{ triggerTurn: true },
+									);
+								} catch (sendError) {
+									console.error(`Failed to send incremental child completion notification for '${notification.childKey}':`, sendError);
+								}
+								deps.refreshResultDelivery?.();
+							},
 							onLanePlan: (lanes) => {
 								status.workflowGraph = buildWorkflowLaneGraph(workflowRunId, lanes, status.workflowGraph);
 								applyWorkflowLaneTrace(status.workflowGraph, status.workflow?.trace ?? []);
@@ -5773,6 +5798,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			try {
 				const workflow = await runWorkflowScript({
 					script: requestParams.workflowScript,
+					workflowRunId: foregroundWorkflowRunId,
 					...(delegatedWorkflowPermit ? { oneUsePermit: { claim: (key: string) => claimWorkflowChildPermit(delegatedWorkflowPermit, foregroundWorkflowRunId, key) } } : {}),
 					globalConcurrencyLimit: requestParams.globalConcurrencyLimit ?? deps.config.globalConcurrencyLimit,
 					timeoutMs: timeout,
