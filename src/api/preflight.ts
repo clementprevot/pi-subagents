@@ -80,6 +80,8 @@ export interface SubagentLaunchContractInput {
 	nestedRootRunId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
+	hostAvailableBuiltins?: readonly string[];
 }
 
 export interface SubagentLaunchContractAgentCandidate {
@@ -371,6 +373,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			capabilityCeiling: effectiveCapabilityCeiling,
 			agentName: agent.name,
 			permissionRules,
+			hostAvailableBuiltins: input.hostAvailableBuiltins,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

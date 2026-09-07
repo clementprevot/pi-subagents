@@ -112,6 +112,12 @@ export interface BuildInProcessChildLaunchInput {
 	 * them and exposes the child environment external extensions read.
 	 */
 	host: "parent" | "runner";
+	/**
+	 * Builtin tool names the host runtime provides. When set, child tool plans
+	 * intersect declared agent tools with this set, omitting tools the host
+	 * cannot provide and failing closed when required tools are unavailable.
+	 */
+	hostAvailableBuiltins?: readonly string[];
 }
 
 export interface InProcessChildCapture {
@@ -192,6 +198,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		agentName: input.childAgentName,
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
+		hostAvailableBuiltins: input.hostAvailableBuiltins,
 	});
 
 	const inherited = input.inherited;

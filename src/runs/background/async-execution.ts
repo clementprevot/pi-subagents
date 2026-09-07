@@ -14,7 +14,7 @@ import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts"
 import { createAtomicJsonWriter, writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { planChildLaunch, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
-import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
@@ -963,6 +963,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: stepCwd, agent: a.name, model: modelCandidates[0] ?? model, warn: (violation) => sendRuleViolationWarning(ctx.pi, violation) });
 		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
 		const fast = s.fast ?? params.fast ?? a.fast;
+		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 		const toolPlan = resolvePiLaunchToolPlan({
 			tools: a.tools,
 			excludeTools: a.excludeTools,
@@ -981,6 +982,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			agentName: a.name,
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
+			hostAvailableBuiltins,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -1377,6 +1379,7 @@ export function executeAsyncChain(
 				deadlineAt,
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				runFanoutBudget,
+				hostAvailableBuiltins: getHostBuiltinToolNames(ctx.pi),
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1759,6 +1762,7 @@ export function executeAsyncSingle(
 			return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 		}
 	}
+	const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: agentConfig.tools,
 		excludeTools: agentConfig.excludeTools,
@@ -1777,6 +1781,7 @@ export function executeAsyncSingle(
 		agentName: agentConfig.name,
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
+		hostAvailableBuiltins,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {
@@ -1988,6 +1993,7 @@ export function executeAsyncSingle(
 				launchContractDigest,
 				launchResolvedExtensions,
 				runFanoutBudget,
+				hostAvailableBuiltins,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(lane ? { lane } : {}),

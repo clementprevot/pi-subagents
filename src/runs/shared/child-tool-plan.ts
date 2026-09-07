@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	formatUnresolvedMcpDirectToolSelectors,
 	resolveMcpDirectToolResolution,
@@ -296,6 +297,22 @@ export function resolvePermissionSystemExtension(): string | undefined {
 	}
 	if (errors.length > 0) throw errors[0]!;
 	return undefined;
+}
+
+/**
+ * Extract the names of builtin tools the host provides. Use this to pass
+ * `hostAvailableBuiltins` to `resolvePiLaunchToolPlan` so child tool plans
+ * intersect declared agent tools with what the host actually supports.
+ */
+export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[] {
+	try {
+		return pi
+			.getAllTools()
+			.filter((tool) => (tool.sourceInfo as { source?: string } | undefined)?.source === "builtin")
+			.map((tool) => tool.name);
+	} catch {
+		return [];
+	}
 }
 
 export function resolvePiLaunchToolPlan(
