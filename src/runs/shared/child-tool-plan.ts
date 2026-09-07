@@ -303,15 +303,21 @@ export function resolvePermissionSystemExtension(): string | undefined {
  * Extract the names of builtin tools the host provides. Use this to pass
  * `hostAvailableBuiltins` to `resolvePiLaunchToolPlan` so child tool plans
  * intersect declared agent tools with what the host actually supports.
+ *
+ * Returns `undefined` when builtin tool discovery fails or yields nothing,
+ * so callers skip the intersection (fail-safe to allowing all declared tools).
+ * This handles test mocks without proper tool registration and hosts whose
+ * getAllTools() throws before extensions load.
  */
-export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[] {
+export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[] | undefined {
 	try {
-		return pi
+		const builtins = pi
 			.getAllTools()
 			.filter((tool) => (tool.sourceInfo as { source?: string } | undefined)?.source === "builtin")
 			.map((tool) => tool.name);
+		return builtins.length > 0 ? builtins : undefined;
 	} catch {
-		return [];
+		return undefined;
 	}
 }
 

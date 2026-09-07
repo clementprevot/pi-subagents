@@ -167,11 +167,22 @@ describe("production launch path supplies hostAvailableBuiltins", () => {
 		assert.deepEqual(builtins, ["read", "bash"]);
 	});
 
-	it("getHostBuiltinToolNames returns empty array on failure", () => {
-		const mockPi = {
+	it("getHostBuiltinToolNames returns undefined on failure or empty results", () => {
+		const throwingPi = {
 			getAllTools: () => { throw new Error("Not available"); },
 		};
-		const builtins = getHostBuiltinToolNames(mockPi);
-		assert.deepEqual(builtins, []);
+		assert.equal(getHostBuiltinToolNames(throwingPi), undefined);
+
+		const emptyPi = {
+			getAllTools: () => [],
+		};
+		assert.equal(getHostBuiltinToolNames(emptyPi), undefined);
+
+		const noBuiltinsPi = {
+			getAllTools: () => [
+				{ name: "custom-tool", sourceInfo: { source: "extension" } },
+			],
+		};
+		assert.equal(getHostBuiltinToolNames(noBuiltinsPi), undefined);
 	});
 });
