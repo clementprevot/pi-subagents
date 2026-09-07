@@ -13,6 +13,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Intersect agent frontmatter `tools:` with host-available builtins before spawning children, so hosts with restricted tool menus (e.g. Prime Agent's `ipython`-only set) reject unavailable tools at launch instead of after spawn. Thanks to [@BioInfo](https://github.com/BioInfo) for #2034.
 - Prevent stale final-drain timers from aborting resumed native foreground and background child work. Thanks to [@harche](https://github.com/harche) for #2025.
 - Avoid requiring chord aliases on pre-0.85 Pi hosts while keeping required host runtime aliases fail-closed (#2026). Thanks to [@samuela](https://github.com/samuela).
 - Invoke Worktrunk through `git wt` on Windows to avoid Windows Terminal's conflicting `wt.exe` alias. Thanks to [@Zethu5](https://github.com/Zethu5) for #2033.

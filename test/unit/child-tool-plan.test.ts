@@ -31,3 +31,96 @@ describe("child tool plan", () => {
 		}
 	});
 });
+
+describe("child tool plan host builtin intersection", () => {
+	it("intersects declared tools with host-available builtins", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "grep", "find", "ls", "bash"],
+			hostAvailableBuiltins: ["ipython", "bash"],
+		});
+		assert.deepEqual(plan.declaredBuiltinTools, ["bash"]);
+		assert.deepEqual(plan.unavailableHostBuiltins, ["read", "grep", "find", "ls"]);
+		assert.deepEqual(plan.effectiveToolAllowlist, ["bash"]);
+	});
+
+	it("keeps all tools when host provides them", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "grep", "bash"],
+			hostAvailableBuiltins: ["read", "grep", "bash", "write", "find"],
+		});
+		assert.deepEqual(plan.declaredBuiltinTools, ["read", "grep", "bash"]);
+		assert.deepEqual(plan.unavailableHostBuiltins, []);
+	});
+
+	it("works without hostAvailableBuiltins (standard Pi hosts)", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "grep", "find", "ls"],
+		});
+		assert.deepEqual(plan.declaredBuiltinTools, ["read", "grep", "find", "ls"]);
+		assert.deepEqual(plan.unavailableHostBuiltins, []);
+	});
+
+	it("fails when requireReadTool is true but host does not provide read", () => {
+		assert.throws(
+			() => resolvePiLaunchToolPlan({
+				tools: ["bash"],
+				requireReadTool: true,
+				hostAvailableBuiltins: ["ipython", "bash"],
+				agentName: "oracle",
+			}),
+			/Host runtime does not provide required tool 'read' for agent 'oracle'/,
+		);
+		assert.throws(
+			() => resolvePiLaunchToolPlan({
+				tools: ["bash"],
+				requireReadTool: true,
+				hostAvailableBuiltins: ["bash"],
+			}),
+			/Host runtime does not provide required tool 'read'/,
+		);
+	});
+
+	it("includes unavailableHostBuiltins in capability audit", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "bash"],
+			hostAvailableBuiltins: ["bash"],
+			capabilityCeiling: {
+				version: 1,
+				allowedTools: ["read", "bash"],
+				denyExtensions: false,
+				sources: ["test"],
+			},
+		});
+		assert.deepEqual(plan.capabilityAudit?.unavailableHostBuiltins, ["read"]);
+	});
+
+	it("respects both capability ceiling and host availability", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "grep", "bash", "write"],
+			hostAvailableBuiltins: ["read", "grep", "bash"],
+			capabilityCeiling: {
+				version: 1,
+				allowedTools: ["read", "bash"],
+				denyExtensions: false,
+				sources: ["test"],
+			},
+		});
+		assert.deepEqual(plan.declaredBuiltinTools, ["read", "bash"]);
+		assert.deepEqual(plan.unavailableHostBuiltins, []);
+	});
+
+	it("tracks tools removed by host even when ceiling allows them", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "grep", "bash"],
+			hostAvailableBuiltins: ["bash"],
+			capabilityCeiling: {
+				version: 1,
+				allowedTools: ["read", "grep", "bash"],
+				denyExtensions: false,
+				sources: ["test"],
+			},
+		});
+		assert.deepEqual(plan.declaredBuiltinTools, ["bash"]);
+		assert.deepEqual(plan.unavailableHostBuiltins, ["read", "grep"]);
+	});
+});
