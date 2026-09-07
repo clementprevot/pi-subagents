@@ -39,7 +39,7 @@ function run(name, command, args, workdir, extra = {}, success = true) {
 fs.writeFileSync(path.join(host, "package.json"), JSON.stringify({ private: true, dependencies: { "@earendil-works/pi-coding-agent": version } }));
 run("host-install", "npm", ["install", "--no-audit", "--no-fund"], host);
 const packed = JSON.parse(run("pack", "npm", ["pack", "--json", "--pack-destination", root], source).stdout)[0];
-assert.ok(packed.files.some(file => file.path === "runner-server-preload.mjs"), "preload must ship");
+assert.ok(packed.files.some(file => file.path === "runner-peer-preload.mjs"), "peer preload must ship");
 fs.writeFileSync(path.join(extension, "package.json"), JSON.stringify({ private: true, dependencies: { "pi-subagents": `file:${path.join(root, packed.filename)}` } }));
 run("extension-install", "npm", ["install", "--no-audit", "--no-fund"], extension);
 const installed = path.join(extension, "node_modules/pi-subagents");
@@ -74,7 +74,7 @@ if (isPi0850) {
 	const negative = run("without-preload", process.execPath, args, cwd, childEnv, false);
 	assert.match(negative.stderr, /Model "pi085-smoke\/local" not found/);
 }
-const preload = resolved.supplemental.length ? ["--import", pathToFileURL(path.join(installed, "runner-server-preload.mjs")).href] : [];
+const preload = Object.keys(resolved.aliases).length ? ["--import", pathToFileURL(path.join(installed, "runner-peer-preload.mjs")).href] : [];
 const positive = run("child", process.execPath, [...preload, ...args], cwd, childEnv);
 assert.match(positive.stdout, /PASS public SDK\/default child factory/);
 assert.equal(findHostPeerPackageDir(pi, "@earendil-works/pi-server"), undefined);

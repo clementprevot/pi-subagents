@@ -8,7 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../src/shared/utils.ts";
 
-test("executeAsyncSingle preloads supplemental server aliases before jiti, but not for complete hosts", async (t) => {
+test("executeAsyncSingle preloads all peer aliases before jiti when any aliases exist", async (t) => {
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "async-spawn-preload-")));
 	const host = path.join(root, "host");
 	const server = "@earendil-works/pi-server";
@@ -87,16 +87,12 @@ test("executeAsyncSingle preloads supplemental server aliases before jiti, but n
 			assert.equal(options.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV], host);
 			const actualAliases = JSON.parse(options.env.JITI_ALIAS) as Record<string, string>;
 			assert.deepEqual(Object.fromEntries(Object.entries(actualAliases).map(([key, target]) => [key, fs.realpathSync(target)])), expectedAliases);
-			const jitiIndex = scenario === "supplemental" ? 2 : 0;
-			if (scenario !== "supplemental") assert.ok(!args.includes("--import"));
-			else {
-				assert.equal(args[0], "--import");
-				assert.equal(args[1], new URL("../../runner-server-preload.mjs", import.meta.url).href);
-				assert.ok(fs.existsSync(fileURLToPath(args[1])));
-			}
-			assert.match(args[jitiIndex], /[/\\]jiti-cli\.mjs$/);
-			assert.match(args[jitiIndex + 1], /[/\\]subagent-runner\.ts$/);
-			assert.equal(args.length, jitiIndex + 3);
+			assert.equal(args[0], "--import");
+			assert.equal(args[1], new URL("../../runner-peer-preload.mjs", import.meta.url).href);
+			assert.ok(fs.existsSync(fileURLToPath(args[1])));
+			assert.match(args[2], /[/\\]jiti-cli\.mjs$/);
+			assert.match(args[3], /[/\\]subagent-runner\.ts$/);
+			assert.equal(args.length, 5);
 		}
 	} finally {
 		t.mock.restoreAll();
