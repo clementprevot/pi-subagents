@@ -5524,7 +5524,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									outcome: notification.outcome,
 									workflowRunning: notification.workflowRunning,
 								});
-								const step = status.steps?.find((s) => s.workflowKey === notification.childKey);
 								try {
 									deps.pi.sendMessage(
 										{
