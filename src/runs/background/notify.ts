@@ -81,7 +81,6 @@ export interface CompletionNotification {
 	timedOut?: boolean;
 	stopped?: boolean;
 	turnBudgetExceeded?: boolean;
-	incrementalChildCompletion?: IncrementalChildCompletion;
 	results?: Array<{
 		runId?: string;
 		workflowKey?: string;
@@ -489,30 +488,6 @@ function completionBatchKey(result: CompletionNotification): string {
 	return cwd ? `cwd:${cwd}` : "unknown";
 }
 
-function incrementalChildCompletionKey(child: IncrementalChildCompletion): string {
-	const parts = ["incremental-child", child.workflowRunId, child.childKey];
-	if (child.childRunId) parts.push(child.childRunId);
-	return parts.join(":");
-}
-
-function sendIncrementalChildCompletion(pi: Pick<ExtensionAPI, "sendMessage">, child: IncrementalChildCompletion): boolean {
-	const content = formatIncrementalChildCompletion(child);
-	const display = child.outcome !== "completed";
-	try {
-		pi.sendMessage(
-			{
-				customType: "subagent-incremental-child-notify",
-				content,
-				display,
-			},
-			{ triggerTurn: true },
-		);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 export function buildCompletionDetails(result: CompletionNotification): SubagentNotifyDetails {
 	const agent = result.agent ?? "unknown";
 	const summary = typeof result.summary === "string" ? result.summary : "";
@@ -700,19 +675,6 @@ export default function registerSubagentNotify(
 		} else if (!ownsResult(result.sessionId, result.completionOwnerId)) {
 			traceNotification("not_owned", result);
 			return Promise.resolve(false);
-		}
-		if (result.incrementalChildCompletion) {
-			const child = result.incrementalChildCompletion;
-			const childKey = incrementalChildCompletionKey(child);
-			const childSeenAt = seen.get(childKey);
-			if (childSeenAt !== undefined && now() - childSeenAt <= ttlMs) {
-				traceNotification("deduped_ttl", result);
-				return Promise.resolve(true);
-			}
-			if (childSeenAt !== undefined) seen.delete(childKey);
-			const sent = sendIncrementalChildCompletion(pi, child);
-			if (sent) markSeenWithTtl(seen, childKey, now(), ttlMs);
-			return Promise.resolve(sent);
 		}
 		if (result.intercomDelivered === true) {
 			traceNotification("intercom_delivered", result);
