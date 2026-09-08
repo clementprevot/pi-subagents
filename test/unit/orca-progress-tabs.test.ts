@@ -623,6 +623,59 @@ test("auto-close watchdog closes only on exact title/tabId match after completed
 	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1", title: "other" } } }), "NOT_CLOSED");
 });
 
+function writeSlowCreateOrca(dir: string, delayMs: number): string {
+	return writeNodeCommand(dir, "orca", [
+		"const fs=require('fs');",
+		"const path=require('path');",
+		"const args=process.argv.slice(2);",
+		"const action=args[1];",
+		"if(action==='create'){",
+		`  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${delayMs});`,
+		"  const title=args[args.indexOf('--title')+1];",
+		"  process.stdout.write(JSON.stringify({terminal:{handle:'term-1',tabId:'tab-1',title}},null,2)+'\\n');",
+		"} else if(action==='show'){",
+		"  process.stdout.write(fs.readFileSync(path.join(__dirname,'show-payload.json'),'utf8'));",
+		"} else if(action==='close'){",
+		"  fs.writeFileSync(path.join(__dirname,'close.json'), JSON.stringify(args));",
+		"}",
+	].join(""));
+}
+
+async function runAutoCloseRace(input: {
+	dir: string;
+	status: "completed" | "failed" | "stopped";
+	createDelayMs?: number;
+}): Promise<"CLOSED" | "NOT_CLOSED"> {
+	const title = "subagents · worker · 1";
+	const closeFile = path.join(input.dir, "close.json");
+	fs.writeFileSync(path.join(input.dir, "show-payload.json"), JSON.stringify({ terminal: { handle: "term-1", tabId: "tab-1", title } }));
+	const fakeOrca = writeSlowCreateOrca(input.dir, input.createDelayMs ?? 400);
+	const runId = `autoclose-race-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+	const tab = createOrcaProgressTab({
+		cwd: input.dir,
+		runId,
+		agent: "worker",
+		index: 0,
+		config: { enabled: true, autoCloseDelaySec: 0.05 },
+		command: fakeOrca,
+	});
+	assert.ok(tab);
+	await tab.finish(input.status);
+	const manifestDir = path.join(input.dir, ".pi", "subagents", "views", "orca");
+	const manifestName = fs.readdirSync(manifestDir).find((name) => name.startsWith(`${runId}-0-`) && name.endsWith(".json"));
+	assert.ok(manifestName);
+	const manifest = JSON.parse(fs.readFileSync(path.join(manifestDir, manifestName), "utf-8")) as Record<string, unknown>;
+	assert.equal(manifest.orcaHandle, undefined, "finish() raced ahead of create; handle must still be missing");
+	await tab.creationSettled;
+	return await waitClosedOrNot(closeFile, 3_000) ? "CLOSED" : "NOT_CLOSED";
+}
+
+test("auto-close catch-up closes when create lands the handle after a completed finish", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "completed" }), "CLOSED");
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "failed" }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "stopped" }), "NOT_CLOSED");
+});
+
 test("mirror output truncates at a finite byte bound", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
 	const dir = tempDir();
 	const capture = path.join(dir, "capture.json");
