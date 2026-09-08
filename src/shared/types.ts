@@ -2534,6 +2534,8 @@ export type FleetKeybindingsConfig = Partial<Record<FleetKeybindingAction, strin
 export interface OrcaProgressTabsConfig {
 	/** Create one Orca observer tab per top-level subagent call. Experimental and opt-in. */
 	enabled?: boolean;
+	/** Seconds to wait after a successful run before closing the observer tab. 0 or omit = leave the tab open. */
+	autoCloseDelaySec?: number;
 }
 
 export interface MainWindowRendererConfig {

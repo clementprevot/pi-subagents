@@ -37,6 +37,7 @@ afterEach(() => {
 	removeProgressFiles("progress-");
 	removeProgressFiles("disabled-run-");
 	removeProgressFiles("standalone-pi-");
+	removeProgressFiles("autoclose-");
 });
 
 function tempDir(): string {
@@ -557,6 +558,69 @@ test("create stdout pretty-printed JSON lands handle/tabId/title in the observer
 	assert.equal(manifest.orcaTitle, "subagents · worker · 1");
 	assert.equal(manifest.orcaRaw, undefined);
 	tab.finish("failed");
+});
+
+function writeLifecycleOrca(dir: string): string {
+	return writeNodeCommand(dir, "orca", [
+		"const fs=require('fs');",
+		"const path=require('path');",
+		"const args=process.argv.slice(2);",
+		"const action=args[1];",
+		"if(action==='create'){",
+		"  const title=args[args.indexOf('--title')+1];",
+		"  process.stdout.write(JSON.stringify({terminal:{handle:'term-1',tabId:'tab-1',title}},null,2)+'\\n');",
+		"} else if(action==='show'){",
+		"  process.stdout.write(fs.readFileSync(path.join(__dirname,'show-payload.json'),'utf8'));",
+		"} else if(action==='close'){",
+		"  fs.writeFileSync(path.join(__dirname,'close.json'), JSON.stringify(args));",
+		"}",
+	].join(""));
+}
+
+async function waitClosedOrNot(file: string, timeoutMs = 2_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (fs.existsSync(file)) return true;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	return false;
+}
+
+async function runAutoCloseCase(input: {
+	dir: string;
+	status: "completed" | "failed" | "stopped";
+	show: unknown;
+	delaySec?: number;
+}): Promise<"CLOSED" | "NOT_CLOSED"> {
+	const closeFile = path.join(input.dir, "close.json");
+	fs.writeFileSync(path.join(input.dir, "show-payload.json"), JSON.stringify(input.show));
+	const fakeOrca = writeLifecycleOrca(input.dir);
+	const runId = `autoclose-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+	const tab = createOrcaProgressTab({
+		cwd: input.dir,
+		runId,
+		agent: "worker",
+		index: 0,
+		config: { enabled: true, autoCloseDelaySec: input.delaySec ?? 0.05 },
+		command: fakeOrca,
+	});
+	assert.ok(tab);
+	await tab.creationSettled;
+	await tab.finish(input.status);
+	return await waitClosedOrNot(closeFile) ? "CLOSED" : "NOT_CLOSED";
+}
+
+test("auto-close watchdog closes only on exact title/tabId match after completed runs", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const title = "subagents · worker · 1";
+	const matching = { terminal: { handle: "term-1", tabId: "tab-1", title } };
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: matching }), "CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "failed", show: matching }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "stopped", show: matching }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", title } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1", title: 1 } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1", title: "other" } } }), "NOT_CLOSED");
 });
 
 test("mirror output truncates at a finite byte bound", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {

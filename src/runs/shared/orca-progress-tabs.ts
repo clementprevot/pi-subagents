@@ -52,6 +52,15 @@ const ORCA_CLEANUP_WATCHDOG_SCRIPT = [
 	"setInterval(check,1000);check();",
 ].join("");
 
+const ORCA_CLOSE_WATCHDOG_SCRIPT = [
+	"const {spawn}=require('node:child_process');",
+	"const delayMs=Number(process.argv[1]),command=process.argv[2],handle=process.argv[3],expectTitle=process.argv[4],expectTabId=process.argv[5];",
+	"function run(args){return new Promise(resolve=>{try{const child=spawn(command,args,{stdio:['ignore','pipe','ignore'],windowsHide:true});let stdout='';if(child.stdout)child.stdout.on('data',chunk=>{stdout+=String(chunk);if(stdout.length>65536)stdout=stdout.slice(-65536)});child.once('error',()=>resolve({ok:false,stdout:''}));child.once('close',code=>resolve({ok:code===0,stdout}))}catch{resolve({ok:false,stdout:''})}})}",
+	"function parseJson(raw){try{return JSON.parse(String(raw||'').trim())}catch{return undefined}}",
+	"function pickTerminal(parsed){if(!parsed||typeof parsed!=='object')return undefined;return parsed.terminal||(parsed.result&&(parsed.result.terminal||parsed.result))||parsed}",
+	"setTimeout(()=>{void (async()=>{try{const shown=await run(['terminal','show','--terminal',handle,'--json']);const parsed=parseJson(shown.stdout);const t=pickTerminal(parsed);if(!t||typeof t!=='object')return;if(expectTitle&&(typeof t.title!=='string'||t.title!==expectTitle))return;if(expectTabId&&expectTabId!=='-'&&(typeof t.tabId!=='string'||t.tabId!==expectTabId))return;await run(['terminal','close','--terminal',handle,'--tab','--json'])}catch{}finally{process.exit(0)}})()},Number.isFinite(delayMs)&&delayMs>0?delayMs:0);",
+].join("");
+
 export interface OrcaProgressTab {
 	/** Resolves when the terminal-create watchdog closes, after its final manifest/queue writes (success or failure). Not viewer completion. */
 	readonly creationSettled: Promise<void>;
@@ -305,6 +314,62 @@ function scheduleCleanup(nodeExecutable: string, paths: string[]): void {
 	}
 }
 
+function scheduleTabClose(input: {
+	nodeExecutable: string;
+	orcaCommand: string;
+	handle: string;
+	title: string;
+	tabId?: string;
+	delayMs: number;
+}): void {
+	try {
+		const watchdog = spawn(input.nodeExecutable, [
+			"-e", ORCA_CLOSE_WATCHDOG_SCRIPT,
+			String(input.delayMs),
+			input.orcaCommand,
+			input.handle,
+			input.title,
+			input.tabId ?? "-",
+		], {
+			detached: true,
+			stdio: "ignore",
+			windowsHide: true,
+		});
+		watchdog.once("error", () => {});
+		watchdog.unref();
+	} catch {
+		// Tab auto-close remains best effort for this optional observer.
+	}
+}
+
+function readObserverManifest(manifestPath: string | undefined): OrcaObserverManifest | undefined {
+	if (!manifestPath) return undefined;
+	try {
+		const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+		return parsed as OrcaObserverManifest;
+	} catch {
+		return undefined;
+	}
+}
+
+function extractOrcaHandle(parsed: unknown): { handle?: string; tabId?: string; title?: string } {
+	if (!parsed || typeof parsed !== "object") return {};
+	const record = parsed as Record<string, unknown>;
+	const nested = record.terminal
+		?? (record.result && typeof record.result === "object" && !Array.isArray(record.result)
+			? ((record.result as Record<string, unknown>).terminal ?? record.result)
+			: undefined)
+		?? record;
+	if (!nested || typeof nested !== "object" || Array.isArray(nested)) return {};
+	const terminal = nested as Record<string, unknown>;
+	return {
+		handle: typeof terminal.handle === "string" ? terminal.handle : undefined,
+		tabId: typeof terminal.tabId === "string" ? terminal.tabId : undefined,
+		title: typeof terminal.title === "string" ? terminal.title : undefined,
+	};
+}
+
 function loadOrcaProgressTabsConfig(): OrcaProgressTabsConfig | undefined {
 	try {
 		const configPath = path.join(getAgentDir(), "extensions", "subagent", "config.json");
@@ -313,8 +378,15 @@ function loadOrcaProgressTabsConfig(): OrcaProgressTabsConfig | undefined {
 		const value = (parsed as Record<string, unknown>).orcaProgressTabs;
 		if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 		const config = value as Record<string, unknown>;
-		if (Object.keys(config).some((key) => key !== "enabled") || typeof config.enabled !== "boolean") return undefined;
-		return { enabled: config.enabled };
+		const extraKeys = Object.keys(config).filter((key) => key !== "enabled" && key !== "autoCloseDelaySec");
+		if (extraKeys.length > 0) return undefined;
+		if (config.enabled !== undefined && typeof config.enabled !== "boolean") return undefined;
+		const autoCloseDelaySec = config.autoCloseDelaySec;
+		if (autoCloseDelaySec !== undefined && (typeof autoCloseDelaySec !== "number" || !Number.isFinite(autoCloseDelaySec) || autoCloseDelaySec < 0)) return undefined;
+		const loaded: OrcaProgressTabsConfig = {};
+		if (typeof config.enabled === "boolean") loaded.enabled = config.enabled;
+		if (typeof autoCloseDelaySec === "number") loaded.autoCloseDelaySec = autoCloseDelaySec;
+		return loaded;
 	} catch {
 		return undefined;
 	}
@@ -504,6 +576,28 @@ export function createOrcaProgressTab(input: {
 						try { fs.writeFileSync(donePath, `${status}\n`, { encoding: "utf-8", mode: 0o600 }); } catch { /* best effort */ }
 						cleanupPaths = [logPath, donePath];
 						scheduleDeferredCleanup();
+						const delaySec = config?.autoCloseDelaySec;
+						if (status === "completed" && typeof delaySec === "number" && delaySec > 0) {
+							const manifest = readObserverManifest(manifestPath);
+							const extracted = extractOrcaHandle(manifest?.orca);
+							const handle = (typeof manifest?.orcaHandle === "string" && manifest.orcaHandle)
+								|| extracted.handle;
+							const tabId = (typeof manifest?.orcaTabId === "string" && manifest.orcaTabId)
+								|| extracted.tabId;
+							const expectedTitle = (typeof manifest?.orcaTitle === "string" && manifest.orcaTitle)
+								|| extracted.title
+								|| title;
+							if (handle) {
+								scheduleTabClose({
+									nodeExecutable,
+									orcaCommand: command,
+									handle,
+									title: expectedTitle,
+									tabId,
+									delayMs: delaySec * 1000,
+								});
+							}
+						}
 					}
 					resolve();
 				});
