@@ -10,10 +10,13 @@
  */
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "../../shared/utils.ts";
+import { pathToFileURL } from "node:url";
+import * as path from "node:path";
+import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
 import { prepareReadonlySessionEvidence } from "./readonly-session-evidence.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
+import { resolvePiPackageRoot } from "./pi-spawn.ts";
 
 // Private runtime authority for host continuation planning; injected factories have none.
 const readonlyModels = new WeakMap<ChildSession, { current: ModelInfo; resolve(reference: string): ModelInfo | undefined; requestBytes: number }>();
@@ -122,6 +125,14 @@ export interface DefaultChildSessionFactoryOptions {
 	shutdownTimeoutMs?: number;
 }
 
+async function loadHostPiCodingAgent(): Promise<PiCodingAgentModule> {
+	const packageRoot = process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV]?.trim() || resolvePiPackageRoot();
+	if (packageRoot) {
+		return await import(pathToFileURL(path.join(packageRoot, "dist", "index.js")).href) as PiCodingAgentModule;
+	}
+	return await import("@earendil-works/pi-coding-agent");
+}
+
 type ModelRuntimeInstance = Awaited<ReturnType<PiCodingAgentModule["ModelRuntime"]["create"]>>;
 
 const CHILD_PROMPT_RUNTIME_EXTENSION_PATH = "<inline:pi-subagents:prompt-runtime>";
@@ -193,7 +204,7 @@ async function flushQueuedProviderRegistrations(loader: InstanceType<PiCodingAge
  * on the first child launch and dropped on `dispose()`.
  */
 export function createDefaultChildSessionFactory(options: DefaultChildSessionFactoryOptions = {}): ChildSessionFactory {
-	const loadPiCodingAgent = options.loadPiCodingAgent ?? (() => import("@earendil-works/pi-coding-agent"));
+	const loadPiCodingAgent = options.loadPiCodingAgent ?? loadHostPiCodingAgent;
 	const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
 	let runtime: ReturnType<PiCodingAgentModule["ModelRuntime"]["create"]> | undefined;
 	const live = new Set<ChildSession>();

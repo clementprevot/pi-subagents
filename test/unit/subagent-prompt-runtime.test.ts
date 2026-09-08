@@ -717,6 +717,52 @@ describe("subagent prompt runtime", () => {
 		}
 	});
 
+	it("activates required child tools before the first agent turn", () => {
+		const handlers = new Map<string, (payload?: unknown) => unknown>();
+		let active: string[] = [];
+		const setCalls: string[][] = [];
+
+		registerSubagentPromptRuntime({
+			on(event: string, handler: (payload?: unknown) => unknown) {
+				handlers.set(event, handler);
+			},
+			getAllTools: () => ["read", "bash", "edit", "write"].map((name) => ({ name })),
+			getActiveTools: () => active,
+			setActiveTools(toolNames: string[]) {
+				active = toolNames;
+				setCalls.push(toolNames);
+			},
+			registerTool() {},
+		} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }>; getActiveTools(): string[]; setActiveTools(toolNames: string[]): void; registerTool(): void }, childConfig({
+			agent: "worker",
+			requiredTools: ["read", "bash", "edit", "write"],
+		}));
+
+		handlers.get("session_start")?.({});
+		assert.deepEqual(active, ["read", "bash", "edit", "write"]);
+		handlers.get("agent_start")?.({});
+		assert.deepEqual(setCalls, [["read", "bash", "edit", "write"]]);
+	});
+
+	it("fails when required child tools remain inactive after activation", () => {
+		const handlers = new Map<string, (payload?: unknown) => unknown>();
+
+		registerSubagentPromptRuntime({
+			on(event: string, handler: (payload?: unknown) => unknown) {
+				handlers.set(event, handler);
+			},
+			getAllTools: () => ["read", "bash"].map((name) => ({ name })),
+			getActiveTools: () => ["read"],
+			setActiveTools() {},
+			registerTool() {},
+		} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }>; getActiveTools(): string[]; setActiveTools(): void; registerTool(): void }, childConfig({
+			agent: "worker",
+			requiredTools: ["read", "bash"],
+		}));
+
+		assert.throws(() => handlers.get("agent_start")?.({}), /registered required tools but left them inactive: bash/);
+	});
+
 	it("keeps installed pi-intercom while filling only a missing child contact_supervisor tool", async () => {
 		const handlers = new Map<string, (payload?: unknown) => unknown>();
 		const registered: string[] = [];

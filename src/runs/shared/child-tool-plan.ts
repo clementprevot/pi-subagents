@@ -313,7 +313,10 @@ export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): 
 	try {
 		const builtins = pi
 			.getAllTools()
-			.filter((tool) => (tool.sourceInfo as { source?: string } | undefined)?.source === "builtin")
+			.filter((tool) => {
+				const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
+				return source === "builtin" || source === "auto";
+			})
 			.map((tool) => tool.name);
 		return builtins.length > 0 ? builtins : undefined;
 	} catch {

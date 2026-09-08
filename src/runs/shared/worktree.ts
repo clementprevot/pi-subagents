@@ -528,6 +528,11 @@ function hasConfiguredWorktreeBaseDir(baseDir: string | undefined): boolean {
 		: (process.env.PI_SUBAGENTS_WORKTREE_DIR?.trim().length ?? 0) > 0;
 }
 
+function isInsidePiExtensionsDirectory(targetPath: string): boolean {
+	const extensionsDir = normalizeComparableCwd(path.join(getAgentDir(), "extensions"));
+	return isPathInside(extensionsDir, normalizeComparableCwd(targetPath));
+}
+
 interface WorktrunkCapability {
 	available: boolean;
 	reason?: string;
@@ -580,7 +585,7 @@ export function resolveWorktreeProvider(requested: WorktreeProvider | undefined,
 	return "native";
 }
 
-async function resolveSetupProvider(tx: SetupTransaction, requested: WorktreeProvider | undefined, baseDir?: string): Promise<ManagedWorktreeProvider> {
+async function resolveSetupProvider(tx: SetupTransaction, requested: WorktreeProvider | undefined, baseDir: string | undefined, repoRoot: string): Promise<ManagedWorktreeProvider> {
 	const selection = requested ?? DEFAULT_WORKTREE_PROVIDER;
 	if (selection !== "auto" && selection !== "native" && selection !== "worktrunk") throw new Error('worktree provider must be "auto", "native", or "worktrunk"');
 	if (selection === "native") return "native";
@@ -588,6 +593,7 @@ async function resolveSetupProvider(tx: SetupTransaction, requested: WorktreePro
 		if (selection === "worktrunk") throw new Error("worktreeProvider='worktrunk' cannot be combined with worktreeBaseDir or PI_SUBAGENTS_WORKTREE_DIR");
 		return "native";
 	}
+	if (selection === "auto" && isInsidePiExtensionsDirectory(repoRoot)) return "native";
 	let reason: string | undefined;
 	try {
 		const probeExitCodes = Array.from({ length: 256 }, (_, code) => code);
@@ -615,14 +621,17 @@ export function shouldDeferWorktreeCwd(requested: WorktreeProvider | undefined, 
 /**
  * Resolves the dedicated worktree root: the configured base directory or
  * PI_SUBAGENTS_WORKTREE_DIR when set, otherwise a `worktrees` folder sibling
- * to the repository. Managed leaves always nest one level deeper under the
- * project folder (`basename(repoRoot)`).
+ * to the repository. Extension checkouts under Pi's auto-discovery directory
+ * use the agent-level `worktrees` directory instead. Managed leaves always
+ * nest one level deeper under the project folder (`basename(repoRoot)`).
  */
 function resolveWorktreeDedicatedRoot(configuredBaseDir: string | undefined, repoRoot: string): string {
 	const rawBaseDir = configuredBaseDir ?? process.env.PI_SUBAGENTS_WORKTREE_DIR;
 	let expanded: string;
 	if (rawBaseDir === undefined || (configuredBaseDir === undefined && !rawBaseDir.trim())) {
-		expanded = path.join(path.dirname(repoRoot), "worktrees");
+		expanded = isInsidePiExtensionsDirectory(repoRoot)
+			? path.join(getAgentDir(), "worktrees")
+			: path.join(path.dirname(repoRoot), "worktrees");
 	} else {
 		const trimmed = rawBaseDir.trim();
 		if (!trimmed) throw new Error("worktree base directory cannot be empty");
@@ -1333,7 +1342,7 @@ async function allocateWorktrees(tx: SetupTransaction, cwd: string, runId: strin
 	tx.progress.setup.cwd = repo.toplevel;
 	tx.progress.setup.baseCommit = repo.baseCommit;
 	const setupHook = resolveWorktreeSetupHook(repo.toplevel, options?.setupHook);
-	const provider = await resolveSetupProvider(tx, options?.provider, options?.baseDir);
+	const provider = await resolveSetupProvider(tx, options?.provider, options?.baseDir, repo.toplevel);
 	const branchPrefix = normalizeWorktreeBranchPrefix(options?.branchPrefix);
 	const dedicatedRoot = provider === "native" ? resolveWorktreeDedicatedRoot(options?.baseDir, repo.toplevel) : undefined;
 	const worktrees = tx.progress.setup.worktrees;
