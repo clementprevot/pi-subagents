@@ -26,6 +26,7 @@ import { releaseActiveRunIndex, updateActiveRunIndex } from "../../src/runs/back
 import { resolveChildWatchdogConfig } from "../../src/watchdog/child-status.ts";
 import { DEFAULT_WATCHDOG_CONFIG } from "../../src/watchdog/settings.ts";
 import { DEFAULT_CONTROL_CONFIG } from "../../src/runs/shared/subagent-control.ts";
+import { getHostBuiltinToolNames, resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
 
 function launch(cwd: string): ChildSessionLaunch & { storage: Extract<ChildSessionLaunch["storage"], { kind: "file" }> } {
 	return { cwd, storage: { kind: "file", sessionFile: join(cwd, "session.jsonl") }, model: "baseten/model-a", tools: ["read"], extensionPaths: [],
@@ -194,6 +195,65 @@ describe("native 0.85.1 factory evidence (synthetic transport, real configured M
 			sessionName: "resolved reader", forkCacheKey: "resolved-cache", systemPrompt: "Retain the completed read.",
 		});
 	}
+
+	it("executes an auto-discovered builtin override from an explicit reviewer tool allowlist", async () => fixture(async ({ l, factory, captured, requests, setResponses, agentDir }) => {
+		const explicitTools = ["read", "grep", "find", "ls", "bash"];
+		const extensionDir = join(agentDir, "extensions");
+		mkdirSync(extensionDir);
+		writeFileSync(join(extensionDir, "read-override.ts"), `
+import { readFileSync } from "node:fs";
+export default function (pi) {
+	pi.registerTool({
+		name: "read", label: "Read override", description: "Read an isolated fixture file",
+		parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+		async execute(_id, params, _signal, _update, ctx) {
+			return { content: [{ type: "text", text: "AUTO_OVERRIDE:" + readFileSync(ctx.cwd + "/" + params.path, "utf8") }], details: {} };
+		},
+	});
+}`);
+		l.ambientExtensions = true;
+		const host = await factory.create({ ...l, storage: { kind: "memory" }, tools: explicitTools });
+		assert.deepEqual(captured[0]?.session.getActiveToolNames(), explicitTools);
+		assert.equal(captured[0]?.session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo.source, "auto");
+		const oldDiscovery = captured[0]!.session.getAllTools()
+			.filter((tool) => tool.sourceInfo.source === "builtin")
+			.map((tool) => tool.name);
+		const discovered = getHostBuiltinToolNames(captured[0]!.session);
+		assert.ok(discovered?.includes("read"));
+		await host.dispose();
+
+		const childLaunch = (hostAvailableBuiltins: readonly string[], runId: string) => buildInProcessChildLaunch({
+			cwd: l.cwd, host: "runner", sessionEnabled: false, model: l.model,
+			tools: ["read"], hostAvailableBuiltins, allowNestedSubagents: false, waitToolEnabled: false,
+			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
+			parentSessionId: "tool-proof-parent", runId, childAgentName: "reviewer", childIndex: 0,
+			systemPrompt: "Read marker.txt exactly once.",
+		});
+		const oldLaunch = childLaunch(oldDiscovery, "old-tool-discovery");
+		assert.deepEqual(oldLaunch.toolPlan.effectiveToolAllowlist, []);
+		assert.equal(oldLaunch.toolPlan.explicitToolAllowlist, true);
+		assert.deepEqual(oldLaunch.session.tools, []);
+		setResponses([() => sse(true), () => sse(false)]);
+		const oldChild = await factory.create(oldLaunch.session);
+		await oldChild.prompt("Review marker.txt and report its contents.");
+		assert.equal(requests.length, 2);
+		assert.equal("tools" in requests[0]!.body, false);
+		assert.equal(oldChild.messages.some((message) => message.role === "toolResult" && message.toolName === "read" && message.isError), true);
+		assert.doesNotMatch(JSON.stringify(requests), /AUTO_OVERRIDE:DISTINCTIVE_REAL_BUILTIN_READ_RESULT/);
+		await oldChild.dispose();
+
+		const correctedLaunch = childLaunch(discovered, "corrected-tool-discovery");
+		assert.deepEqual(correctedLaunch.toolPlan.effectiveToolAllowlist, ["read"]);
+		assert.deepEqual(correctedLaunch.session.tools, ["read"]);
+		setResponses([() => sse(true), () => sse(false)]);
+		const child = await factory.create(correctedLaunch.session);
+		assert.deepEqual(captured[2]?.session.getActiveToolNames(), ["read"]);
+		await child.prompt("Review marker.txt and report its contents.");
+		assert.equal(requests.length, 4);
+		assert.match(JSON.stringify(requests[3]?.body), /AUTO_OVERRIDE:DISTINCTIVE_REAL_BUILTIN_READ_RESULT/);
+		assert.equal(child.messages.some((message) => message.role === "toolResult" && message.toolName === "read"), true);
+		await child.dispose();
+	}, {}, true));
 
 	for (const scenario of ["success", "retained", "cross-provider-skip", "no-sibling", "second429", "sibling-startup", "sibling-abort", "unverified-sibling", "wrong-model", "changed-file", "missing-file", "cancel-at-create", "deadline-at-create", "usage-budget", "tool-budget", "wait-profile", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"] as const) {
 		it(`actual foreground owned continuation loop: ${scenario}`, async (test) => fixture(async ({ pi, l, factory, requests, setResponses, captured, cwd, agentDir }) => {

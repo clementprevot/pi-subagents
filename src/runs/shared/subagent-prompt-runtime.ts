@@ -401,26 +401,6 @@ function registerToolBudget(pi: ExtensionAPI, budget: ResolvedToolBudget | undef
 	});
 }
 
-function activateRequiredChildTools(pi: ExtensionAPI, requiredTools: readonly string[] | undefined): void {
-	if (!requiredTools?.length) return;
-	const api = pi as ExtensionAPI & { getActiveTools?: () => string[]; setActiveTools?: (toolNames: string[]) => void };
-	if (typeof api.setActiveTools !== "function") return;
-	let active: string[] | undefined;
-	try { active = typeof api.getActiveTools === "function" ? api.getActiveTools() : undefined; }
-	catch { active = undefined; }
-	if (active && requiredTools.every((tool) => active.includes(tool))) return;
-	api.setActiveTools([...new Set([...(active ?? []), ...requiredTools])]);
-}
-
-function assertRequiredChildToolsActive(pi: ExtensionAPI, requiredTools: readonly string[] | undefined): void {
-	if (!requiredTools?.length) return;
-	const getActiveTools = (pi as { getActiveTools?: () => string[] }).getActiveTools;
-	if (typeof getActiveTools !== "function") return;
-	const active = getActiveTools();
-	const inactive = requiredTools.filter((tool) => !active.includes(tool));
-	if (inactive.length) throw new Error(`Child session registered required tools but left them inactive: ${inactive.join(", ")}.`);
-}
-
 function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<ChildRuntimeConfig["structuredOutput"]>): void {
 	const required = structured.acceptanceReport === "required";
 	const parameters = createStructuredOutputToolParameters(structured.schema, { acceptanceReport: structured.acceptanceReport });
@@ -498,15 +478,12 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 		const sessionManager = (ctx as { sessionManager?: Parameters<typeof resolveCurrentSessionId>[0] } | undefined)?.sessionManager;
 		waitState.currentSessionId = sessionManager ? resolveCurrentSessionId(sessionManager) : null;
 		registerNativeSupervisorClientOnce();
-		activateRequiredChildTools(pi, config.requiredTools);
 	});
 	onRuntimeEvent("agent_start", () => {
 		if (!config.requiredTools) return;
-		activateRequiredChildTools(pi, config.requiredTools);
 		const diagnostic = evaluateChildToolDiagnostic(config, pi.getAllTools().map((tool) => tool.name));
 		config.toolDiagnostic?.(diagnostic);
 		if (diagnostic) throw new Error(formatChildToolDiagnostic(diagnostic));
-		assertRequiredChildToolsActive(pi, config.requiredTools);
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
 		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) { drainObservation?.deny(); return; }
