@@ -29,7 +29,7 @@ const ORCA_CREATE_WATCHDOG_SCRIPT = [
 	"function exists(file){try{return fs.existsSync(file)}catch{return false}}",
 	"function keepQueued(){try{const now=new Date();fs.utimesSync(done,now,now)}catch{}}",
 	"function predecessorReady(){if(previous==='-')return true;if(exists(previous.replace(/\\.pending$/,'.ready')))return true;try{return Date.now()-fs.statSync(previous).mtimeMs>=waitTimeout}catch{return true}}",
-	"function updateManifest(state,stdout=''){if(manifest==='-')return;try{const payload=JSON.parse(fs.readFileSync(manifest,'utf8'));payload.state=state;payload.updatedAt=new Date().toISOString();const raw=stdout.trim().split(/\\r?\\n/).filter(Boolean).at(-1);if(raw){try{payload.orca=JSON.parse(raw)}catch{payload.orcaRaw=raw.slice(0,4096)}}fs.writeFileSync(manifest,JSON.stringify(payload,null,2)+'\\n')}catch{}}",
+	"function updateManifest(state,stdout=''){if(manifest==='-')return;try{const payload=JSON.parse(fs.readFileSync(manifest,'utf8'));payload.state=state;payload.updatedAt=new Date().toISOString();const raw=stdout.trim();if(raw){try{const parsed=JSON.parse(raw);payload.orca=parsed;const t=parsed&&typeof parsed==='object'?(parsed.terminal||(parsed.result&&(parsed.result.terminal||parsed.result))||parsed):undefined;if(t&&typeof t==='object'){if(typeof t.handle==='string')payload.orcaHandle=t.handle;if(typeof t.tabId==='string')payload.orcaTabId=t.tabId;if(typeof t.title==='string')payload.orcaTitle=t.title}}catch{payload.orcaRaw=raw.slice(0,4096)}}fs.writeFileSync(manifest,JSON.stringify(payload,null,2)+'\\n')}catch{}}",
 	"function start(){",
 	" try{",
 	"  const child=spawn(command,args,{stdio:['ignore','pipe','ignore'],windowsHide:true});",
@@ -164,6 +164,9 @@ interface OrcaObserverManifest {
 	logPath: string;
 	orca?: unknown;
 	orcaRaw?: string;
+	orcaHandle?: string;
+	orcaTabId?: string;
+	orcaTitle?: string;
 }
 
 function observerManifestPath(cwd: string, stem: string): string | undefined {

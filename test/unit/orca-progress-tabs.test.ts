@@ -526,6 +526,39 @@ test("queued tabs defer cleanup until their terminal create settles", { skip: pr
 	}
 });
 
+test("create stdout pretty-printed JSON lands handle/tabId/title in the observer manifest", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const dir = tempDir();
+	const capture = path.join(dir, "capture.json");
+	const fakeOrca = writeNodeCommand(dir, "orca", [
+		"const fs=require('fs');",
+		"fs.writeFileSync(process.env.ORCA_TEST_CAPTURE, JSON.stringify(process.argv.slice(2)));",
+		"const title=process.argv.slice(2)[process.argv.slice(2).indexOf('--title')+1];",
+		"process.stdout.write(JSON.stringify({terminal:{handle:'term-pretty',tabId:'tab-pretty',title}},null,2)+'\\n');",
+	].join(""));
+	const runId = `progress-pretty-json-${Date.now()}`;
+	const tab = createOrcaProgressTab({
+		cwd: dir,
+		runId,
+		agent: "worker",
+		index: 0,
+		config: { enabled: true },
+		command: fakeOrca,
+		env: { ...process.env, ORCA_TEST_CAPTURE: capture },
+	});
+	assert.ok(tab);
+	await tab.creationSettled;
+	const manifestDir = path.join(dir, ".pi", "subagents", "views", "orca");
+	const manifestName = fs.readdirSync(manifestDir).find((name) => name.startsWith(`${runId}-0-`) && name.endsWith(".json"));
+	assert.ok(manifestName);
+	const manifest = JSON.parse(fs.readFileSync(path.join(manifestDir, manifestName), "utf-8")) as Record<string, unknown>;
+	assert.equal(manifest.state, "open");
+	assert.equal(manifest.orcaHandle, "term-pretty");
+	assert.equal(manifest.orcaTabId, "tab-pretty");
+	assert.equal(manifest.orcaTitle, "subagents · worker · 1");
+	assert.equal(manifest.orcaRaw, undefined);
+	tab.finish("failed");
+});
+
 test("mirror output truncates at a finite byte bound", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
 	const dir = tempDir();
 	const capture = path.join(dir, "capture.json");
