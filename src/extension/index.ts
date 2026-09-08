@@ -336,14 +336,18 @@ function createSlashResultComponent(
 	theme: ExtensionContext["ui"]["theme"],
 	rendererConfig?: MainWindowRendererConfig,
 	foregroundDetachShortcut?: string,
+	getCurrentTheme: () => ExtensionContext["ui"]["theme"] = () => theme,
 ): Container {
 	const container = new Container();
 	let lastVersion = -1;
+	let lastTheme: ExtensionContext["ui"]["theme"] | undefined;
 	container.render = (width: number): string[] => {
 		const snapshot = getSlashRenderableSnapshot(details);
-		if (snapshot.version !== lastVersion || isSlashResultRunning(snapshot.result)) {
+		const currentTheme = getCurrentTheme();
+		if (snapshot.version !== lastVersion || currentTheme !== lastTheme || isSlashResultRunning(snapshot.result)) {
 			lastVersion = snapshot.version;
-			rebuildSlashResultContainer(container, snapshot.result, options, theme, rendererConfig, foregroundDetachShortcut);
+			lastTheme = currentTheme;
+			rebuildSlashResultContainer(container, snapshot.result, options, currentTheme, rendererConfig, foregroundDetachShortcut);
 		}
 		return Container.prototype.render.call(container, width);
 	};
@@ -648,7 +652,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
-		return createSlashResultComponent(details, options, theme, config.mainWindowRenderer, config.foregroundDetachShortcut);
+		return createSlashResultComponent(
+			details,
+			options,
+			theme,
+			config.mainWindowRenderer,
+			config.foregroundDetachShortcut,
+			() => state.lastUiContext?.ui.theme ?? theme,
+		);
 	});
 
 	pi.registerMessageRenderer<undefined>(SLASH_TEXT_RESULT_TYPE, (message, _options, _theme) => {

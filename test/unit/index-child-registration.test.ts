@@ -484,6 +484,67 @@ describe("subagent extension child mode", () => {
 		}
 	});
 
+	it("rerenders slash results with the active theme after an appearance change", () => {
+		const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-slash-renderer-theme-"));
+		try {
+			const script = String.raw`
+				import registerSubagentExtension from "./index.ts";
+				const handlers = new Map();
+				const events = { on() { return () => {}; }, emit() {} };
+				let slashRenderer;
+				const fakePi = new Proxy({
+					events,
+					on(channel, handler) { handlers.set(channel, [...(handlers.get(channel) ?? []), handler]); },
+					registerTool() {}, registerCommand() {}, registerShortcut() {}, sendMessage() {}, getSessionName() {},
+					registerMessageRenderer(type, renderer) { if (type === "subagent-slash-result") slashRenderer = renderer; },
+				}, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
+				const lightTheme = {
+					fg(name, text) { return "light-fg(" + name + ":" + text + ")"; },
+					bg(name, text) { return "light-bg(" + name + ":" + text + ")"; },
+					bold(text) { return "light-bold(" + text + ")"; },
+				};
+				const darkTheme = {
+					fg(name, text) { return "dark-fg(" + name + ":" + text + ")"; },
+					bg(name, text) { return "dark-bg(" + name + ":" + text + ")"; },
+					bold(text) { return "dark-bold(" + text + ")"; },
+				};
+				let currentTheme = lightTheme;
+				const ui = {
+					get theme() { return currentTheme; },
+					setWidget() {}, requestRender() {},
+					onTerminalInput() { return () => {}; },
+					setStatus() {}, notify() {},
+				};
+				const ctx = {
+					cwd: process.cwd(), hasUI: true, ui,
+					sessionManager: { getSessionId() { return "slash-theme-session"; }, getSessionFile() { return null; }, getEntries() { return []; } },
+					modelRegistry: { getAvailable() { return []; } },
+				};
+				registerSubagentExtension(fakePi);
+				for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+				if (!slashRenderer) throw new Error("slash renderer not registered");
+				const component = slashRenderer({ details: {
+					requestId: "slash-theme",
+					result: { content: [{ type: "text", text: "done" }], details: { mode: "single", results: [
+						{ agent: "worker", task: "theme", exitCode: 0, messages: [], usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 } },
+					] } },
+				} }, { expanded: false }, lightTheme);
+				const lightLines = component.render(120).join("\\n");
+				if (!lightLines.includes("light-bg(toolSuccessBg:")) throw new Error("initial theme was not rendered: " + lightLines);
+
+				currentTheme = darkTheme;
+				const darkLines = component.render(120).join("\\n");
+				if (!darkLines.includes("dark-bg(toolSuccessBg:")) throw new Error("active theme was not rendered after appearance change: " + darkLines);
+				if (darkLines.includes("light-bg(toolSuccessBg:")) throw new Error("slash result retained stale theme: " + darkLines);
+				for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+			`;
+			const env = parentToolEnv(agentDir);
+			execFileSync(process.execPath, ["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script], { cwd: projectRoot, env, stdio: "pipe" });
+		} finally {
+			fs.rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
 	it("registers bg_wait and honors waitTool disabled config", () => {
 		const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-wait-tool-config-"));
 		try {
