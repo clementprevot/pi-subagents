@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Add an opt-in `quiet: true` flag to `schedule.create`. A quiet schedule's successful runs and successful workflow children keep their completion notices but no longer trigger a parent turn; failed, stopped, or paused outcomes still wake the session. Default behavior is unchanged. Thanks to [@pablontiv](https://github.com/pablontiv) for #2055.
+- Add an opt-in `quiet: true` flag for recurring `schedule.create`. A quiet schedule's successful automatic runs and successful workflow children keep their completion notices but no longer trigger a parent turn; failed, stopped, or paused outcomes still wake the session. One-shot `at` schedules and `schedule.run` stay noisy unless that launch passes `quiet: true`. Default behavior is unchanged. Thanks to [@pablontiv](https://github.com/pablontiv) for #2055.
 - Add opt-in `orcaProgressTabs.autoCloseDelaySec` to close Orca observer tabs after a successful run. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Add default-off, main-only watchdog questions and task-continuity reviews from bounded delivered orchestration evidence (#2010).
 - Add the built-in `evidence-auditor` for independently reviewing important research claims and source support. Thanks to [@Muskos](https://github.com/Muskos) for #2023.

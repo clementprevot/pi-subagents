@@ -54,7 +54,7 @@ export interface ScheduleRecord {
 	timeoutMs?: number;
 	paused: boolean;
 	sessionOnly?: boolean;
-	/** Opt-in: a successful run posts its visible notice without triggering a parent turn. */
+	/** Opt-in for recurring schedules: a successful automatic fire posts its visible notice without triggering a parent turn. */
 	quiet?: boolean;
 	ownerSessionFile?: string;
 	createdAt: string;
@@ -451,7 +451,7 @@ function sanitizeTarget(params: SubagentParamsLike): { target?: ScheduleTarget; 
 	return { target: { workflowScript: params.workflowScript.trim(), ...(baseRef === undefined ? {} : { baseRef }) } };
 }
 
-function executionParams(schedule: ScheduleRecord): SubagentParamsLike {
+function executionParams(schedule: ScheduleRecord, quiet = false): SubagentParamsLike {
 	return {
 		...schedule.target,
 		async: true,
@@ -459,9 +459,14 @@ function executionParams(schedule: ScheduleRecord): SubagentParamsLike {
 		cwd: schedule.cwd,
 		mission: false,
 		// Scheduled fires have no operator watching, so completions must name the origin.
-		scheduleOrigin: { id: schedule.id, ...(schedule.name ? { name: schedule.name } : {}), ...(schedule.quiet === true ? { quiet: true } : {}) },
+		scheduleOrigin: { id: schedule.id, ...(schedule.name ? { name: schedule.name } : {}), ...(quiet ? { quiet: true } : {}) },
 		...(schedule.timeoutMs === undefined ? {} : { timeoutMs: schedule.timeoutMs }),
 	};
+}
+
+function launchIsQuiet(schedule: ScheduleRecord, dueReason: ScheduleRunRecord["dueReason"], explicitQuiet?: boolean): boolean {
+	if (explicitQuiet === true) return true;
+	return dueReason !== "manual" && schedule.trigger.kind === "interval" && schedule.quiet === true;
 }
 
 function snapshotContext(ctx: ExtensionContext, cwd: string): ExtensionContext {
@@ -616,6 +621,7 @@ export class ScheduledRunManager {
 		if (params.missionId !== undefined || params.mission !== undefined || params.missionUpdate !== undefined || params.missionStatus !== undefined || params.missionScope !== undefined) return textResult("Mission attachment is deferred from this first schedule slice.", undefined, undefined, true);
 		if (params.on !== undefined || params.timezone !== undefined || every === "day" || every === "week" || every === "month" || every === "year") return textResult("Calendar schedules are deferred from this first safe slice. Use a fixed interval such as every:'24h' or every:'7d'.", undefined, undefined, true);
 		if (params.quiet !== undefined && typeof params.quiet !== "boolean") return textResult("quiet must be a boolean.", undefined, undefined, true);
+		if (at && params.quiet === true) return textResult("quiet is only supported for recurring schedules.", undefined, undefined, true);
 		const sessionOnly = params.sessionOnly === true;
 		if (sessionOnly && params.cwd !== undefined && !samePath(params.cwd, ctx.cwd)) return textResult("sessionOnly schedules cannot use an explicit cross-project cwd.", undefined, undefined, true);
 		const ownerSessionFile = sessionOnly ? ctx.sessionManager.getSessionFile() : undefined;
@@ -648,7 +654,7 @@ export class ScheduledRunManager {
 			...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
 			paused: false,
 			...(sessionOnly ? { sessionOnly: true, ownerSessionFile: path.resolve(ownerSessionFile!) } : {}),
-			...(params.quiet === true ? { quiet: true } : {}),
+			...(trigger.kind === "interval" && params.quiet === true ? { quiet: true } : {}),
 			createdAt: timestamp(now),
 			updatedAt: timestamp(now),
 		};
@@ -694,7 +700,8 @@ export class ScheduledRunManager {
 		if (!scheduleBelongsToSession(schedule, context)) {
 			return textResult(`Skipped schedule ${schedule.id}: current session is not its owner.`, [schedule]);
 		}
-		const run = await this.launch(store, schedule, this.now(), "manual", false);
+		if (params.quiet !== undefined && typeof params.quiet !== "boolean") return textResult("quiet must be a boolean.", undefined, undefined, true);
+		const run = await this.launch(store, schedule, this.now(), "manual", false, params.quiet === true);
 		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
 	}
 
@@ -812,7 +819,7 @@ export class ScheduledRunManager {
 		await this.launch(store, schedule, planned, "timer", true);
 	}
 
-	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean): Promise<ScheduleRunRecord> {
+	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean, explicitQuiet?: boolean): Promise<ScheduleRunRecord> {
 		const now = this.now();
 		const run: ScheduleRunRecord = { schemaVersion: 1, id: this.randomId(), scheduleId: schedule.id, plannedAt: timestamp(planned), dueReason, state: "running", startedAt: timestamp(now) };
 		if (schedule.activeRunId) {
@@ -854,7 +861,7 @@ export class ScheduledRunManager {
 		store.write(schedule);
 		store.writeRun(schedule, run, "schedule.run.started");
 		try {
-			const result = await this.deps.launch(executionParams(schedule), this.requireContext(store), new AbortController().signal);
+			const result = await this.deps.launch(executionParams(schedule, launchIsQuiet(schedule, dueReason, explicitQuiet)), this.requireContext(store), new AbortController().signal);
 			const asyncId = result.details?.asyncId ?? result.details?.runId;
 			if (result.isError || !asyncId) throw new Error(result.content.find((item) => item.type === "text")?.text ?? "Scheduled launch failed.");
 			run.asyncId = asyncId;

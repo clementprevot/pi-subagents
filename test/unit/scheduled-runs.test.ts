@@ -676,6 +676,74 @@ describe("quiet schedules", () => {
 		assert.equal(shown.isError, true);
 		assert.match(text(shown), /invalid quiet/);
 	});
+
+	it("rejects quiet:true on one-shot at schedules and keeps their fires noisy", async () => {
+		const h = harness();
+		const rejected = await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-once", at: "+10m", quiet: true, workflowScript: script }, h.ctx);
+		assert.equal(rejected.isError, true);
+		assert.match(text(rejected), /quiet is only supported for recurring schedules/);
+
+		const created = await h.manager.handleToolCall({ action: "schedule.create", id: "once", at: "+10m", workflowScript: script }, h.ctx);
+		assert.equal(created.isError, undefined);
+		assert.equal("quiet" in detailRecords(created)[0]!, false);
+		const file = path.join(scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores")), "once", "schedule.json");
+		const record = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, unknown>;
+		fs.writeFileSync(file, JSON.stringify({ ...record, quiet: true }));
+
+		h.manager.stop();
+		const launches: Launch[] = [];
+		const timers = new FakeTimers();
+		const manager = createScheduledRunManager({
+			config: { scheduledRuns: { enabled: true } },
+			storeRoot: path.join(h.root, "stores"),
+			now: () => h.clock.now,
+			timers,
+			launch: (params, launchCtx) => new Promise((resolve) => launches.push({ params: params as Record<string, unknown>, ctx: launchCtx, resolve: resolve as Launch["resolve"] })) as never,
+		});
+		manager.bindSession(h.ctx);
+		h.clock.now += 10 * 60_000;
+		timers.fireAll();
+		await flush();
+		assert.equal(launches.length, 1);
+		assert.equal("quiet" in (launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
+	});
+
+	it("keeps schedule.run noisy unless that launch asks for quiet", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-hourly", every: "1h", quiet: true, workflowScript: script }, h.ctx);
+
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly" }, h.ctx);
+		await flush();
+		assert.equal(h.launches.length, 1);
+		assert.equal("quiet" in (h.launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-loud" } });
+		await manual;
+		h.manager.handleAsyncCompletion({ runId: "manual-loud", success: true, summary: "Done" });
+
+		const rejected = await h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly", quiet: "yes" as unknown as boolean }, h.ctx);
+		assert.equal(rejected.isError, true);
+		assert.match(text(rejected), /quiet must be a boolean/);
+		assert.equal(h.launches.length, 1);
+
+		const explicit = h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly", quiet: true }, h.ctx);
+		await flush();
+		assert.equal(h.launches.length, 2);
+		assert.deepEqual(h.launches[1]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
+		h.launches[1]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-quiet" } });
+		await explicit;
+	});
+
+	it("keeps quiet on automatic run-due fires of recurring schedules", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-hourly", every: "1h", quiet: true, workflowScript: script }, h.ctx);
+		h.clock.now += 3_600_000;
+		const due = h.manager.handleToolCall({ action: "schedule.run-due" }, h.ctx);
+		await flush();
+		assert.equal(h.launches.length, 1);
+		assert.deepEqual(h.launches[0]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "due-quiet" } });
+		await due;
+	});
 });
 
 describe("recurring schedule execution", () => {
