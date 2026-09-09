@@ -307,6 +307,11 @@ describe("async resume lookup", () => {
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, allowNestedSubagents: "true" });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /allowNestedSubagents/);
 
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, fast: "true" });
+			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /fast must be a boolean/);
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, fast: 1 });
+			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /fast must be a boolean/);
+
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, extensionBindings: { invalid: true } });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /namespace/);
 

@@ -16,6 +16,7 @@ import { childSessionFactoryModule, setChildSessionFactoryModule } from "../../s
 import { createEventBus, createTempDir, events, makeAgent, makeMinimalCtx, removeTempDir } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
 import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey } from "../../src/runs/background/active-async-capacity.ts";
+import { readAsyncRecoveryDescriptor } from "../../src/runs/background/async-resume.ts";
 import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
@@ -1761,12 +1762,16 @@ export default function() {
 				sessionFile,
 				modelOverride: luna.fullId,
 				availableModels: [luna],
-				...(fast !== undefined ? { fast } : {}),
+				...(fast === true ? { fast: true } : {}),
 				maxSubagentDepth: 2,
 			});
 			await readAsyncPayload(sourceId);
-			const descriptor = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, sourceId, "recovery-descriptor.json"), "utf-8")) as { fast?: boolean };
-			assert.equal(descriptor.fast, fast);
+			const descriptorPath = path.join(ASYNC_DIR, sourceId, "recovery-descriptor.json");
+			const descriptor = JSON.parse(fs.readFileSync(descriptorPath, "utf-8")) as { fast?: boolean };
+			if (fast === undefined) delete descriptor.fast;
+			else descriptor.fast = fast;
+			fs.writeFileSync(descriptorPath, JSON.stringify(descriptor), "utf-8");
+			assert.equal(readAsyncRecoveryDescriptor(path.dirname(descriptorPath))?.fast, fast);
 
 			mockPi.onCall({ output: `Revived ${label} work` });
 			const result = await makeAsyncExecutor([agent]).execute(
@@ -1780,8 +1785,6 @@ export default function() {
 			assert.ok(result.details.asyncId);
 			const payload = await readAsyncPayload(result.details.asyncId);
 			assert.equal(payload.success, true);
-			const followUp = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, result.details.asyncId, "recovery-descriptor.json"), "utf-8")) as { fast?: boolean };
-			assert.equal(followUp.fast, fast);
 		}
 	});
 

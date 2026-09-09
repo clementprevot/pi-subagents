@@ -242,9 +242,8 @@ describe("async recovery descriptor", () => {
 	it("rejects non-boolean fast values in persisted recovery descriptors", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-bad-fast-"));
 		try {
-			fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({
+			const base = {
 				version: 1,
-				fast: "true",
 				runFanoutBudget: runFanoutBudget("run-bad-fast"),
 				sourceRunId: "run-bad-fast",
 				agent: "worker",
@@ -256,12 +255,14 @@ describe("async recovery descriptor", () => {
 				outputMode: "inline",
 				maxSubagentDepth: 2,
 				share: false,
-			}), "utf-8");
-
-			assert.throws(
-				() => readAsyncRecoveryDescriptor(root),
-				/fast must be a boolean/,
-			);
+			} as const;
+			for (const fast of ["true", 1] as const) {
+				fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({ ...base, fast }), "utf-8");
+				assert.throws(
+					() => readAsyncRecoveryDescriptor(root),
+					/fast must be a boolean/,
+				);
+			}
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
