@@ -247,7 +247,6 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		};
 
 		const abortChild = (): void => {
-			input.launch.capture.backgroundDrain.abort(timedOut ? "timeout" : interrupted ? "interrupt" : "stop");
 			if (!session || settled || promptSettled) return;
 			void session.abort().catch(() => {
 				// The run settles through its prompt promise; abort failures are not separately actionable.
@@ -313,7 +312,6 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		// If the child emits its terminal event but its run never settles (a hook
 		// is stuck), abort it after a short grace period and then finish without it.
 		function startFinalDrain(): void {
-			if (input.launch.capture.backgroundDrain.active) return;
 			if (childWatchdogIsActive(childWatchdogState)) {
 				armWatchdogTail();
 				return;
@@ -344,11 +342,6 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			}
 			if (action === "start-drain") startFinalDrain();
 		};
-
-		input.launch.capture.backgroundDrain.subscribe((active) => {
-			if (active) applyChildLifecycle("cancel-drain");
-			else startFinalDrain();
-		});
 
 		let toolTimeoutSequence = 0;
 		const activeToolTimeouts = new Map<string, { toolName: string; timer: ReturnType<typeof setTimeout> }>();
@@ -543,7 +536,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			settled = true;
 			const closed = finish();
 			const finalOutput = getFinalOutput(messages);
-			let finalError = error ?? input.launch.capture.backgroundDrain.error ?? assistantError;
+			let finalError = error ?? assistantError;
 			if (!finalError && promptError !== undefined) {
 				finalError = promptError instanceof Error ? promptError.message : String(promptError);
 			}

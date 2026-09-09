@@ -121,7 +121,6 @@ export interface BuildInProcessChildLaunchInput {
 }
 
 export interface InProcessChildCapture {
-	backgroundDrain: { readonly active: boolean; readonly error?: string; abort(action?: "interrupt" | "stop" | "timeout"): void; subscribe(listener: (active: boolean) => void): void };
 	completionIntentContext?(): ArbiterModelContext | undefined;
 	structuredOutput(): { called: boolean; value?: unknown; acceptanceReport?: unknown; acceptanceReportProvided: boolean };
 	toolDiagnostic(): ChildToolDiagnostic | undefined;
@@ -315,7 +314,6 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		config,
 		session,
 		capture: {
-			backgroundDrain: capturedHooks.backgroundDrain,
 			completionIntentContext: capturedHooks.completionIntentContext,
 			structuredOutput: () => ({ called: structuredCalled, value: structuredValue, acceptanceReport: structuredAcceptanceReport, acceptanceReportProvided: structuredAcceptanceProvided }),
 			toolDiagnostic: capturedHooks.toolDiagnostic,

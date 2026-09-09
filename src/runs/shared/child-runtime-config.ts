@@ -86,8 +86,6 @@ export interface ChildRuntimeConfig {
 	/** Receives child watchdog status events. */
 	watchdogStatus?: (event: ChildWatchdogStatusEvent) => void;
 	waitTool: ResolvedWaitToolConfig;
-	/** Launch-owned drain lifecycle; hard cancellation remains controlled by the host. */
-	backgroundDrain?: { signal: AbortSignal; abort(action?: "interrupt" | "stop" | "timeout"): void; report(active: boolean, error?: string): void };
 	/** Shared child bookkeeping so drain and fanout see the same remembered descendants. */
 	runtimeState?: SubagentState;
 	structuredOutput?: ChildStructuredOutput;

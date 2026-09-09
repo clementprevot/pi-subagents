@@ -11,14 +11,13 @@ export function registerWaitTool(
 	enabled = resolveWaitToolConfig().enabled,
 	subscriptions?: Pick<WaitSubscriptionManager, "arm">,
 	defaultTimeoutMs?: number,
-	child?: { nestedRootRunId?: string },
 ): void {
 	const description = `Wait for background, provider, or detached work that has no native completion notification, then return.
 
-${child ? "This child runtime delivers descendant results through blocking bg_wait or agent_end reconciliation; it does not install the root session's native completion notifier. Use bg_wait when you need results during this turn. If you attempt to finish with outstanding descendants, the runtime drains owned work and continues you with terminal results before accepting a final response." : "Ordinary async subagent runs already notify this session natively when they complete or need attention. In an interactive chat, return control instead of calling this merely to wait. Use this tool for provider jobs, remembered detached foreground runs, or other background work without a native notification path. Headless runs auto-drain current-session subagent work at agent_end; use this tool only when the current turn must receive non-notifying background work results."}
+Ordinary async subagent runs already notify this session natively when they complete or need attention. In an interactive chat, return control instead of calling this merely to wait. Use this tool for provider jobs, remembered detached foreground runs, or other background work without a native notification path. Headless runs auto-drain current-session subagent work at agent_end; use this tool only when the current turn must receive non-notifying background work results.
 
 • { } — return when the first initially active async run or registered provider item finishes, or when a subagent needs attention.
-• { all: true } — wait for every async run, provider item, and remembered detached foreground run that was active when the call began.
+• { all: true } — wait for every async run, provider item, and remembered detached foreground descendant that was active when the call began.
 • { id: "..." } — wait for one async or remembered detached foreground subagent run (id or prefix).
 • { id: "...", nonBlocking: true } — resolve the prefix once, persist an exact-run wake subscription, and return immediately. Use this for detached work without native completion delivery; the originating interactive session wakes on completion, failure, attention, reconciliation failure, or timeout.
 • { stopOnAttention: false } — for blocking waits only, keep waiting through idle or long-thinking attention; supervisor/contact requests still stop the wait.
@@ -27,8 +26,6 @@ ${child ? "This child runtime delivers descendant results through blocking bg_wa
 Non-blocking subscriptions are visible in subagent status and differ from disabling waitTool: waitTool.enabled=false returns immediately without registering any future wake. Provider jobs are session-scoped and identified exactly, so replacing one job with another cannot hide a completion. Provider extensions must be explicitly loaded in this process. In a child agent, keep \`bg_wait\` in the child tool allowlist and load each provider through the agent's extensions or subagentOnlyExtensions; this tool never loads providers or grants tools itself.${enabled ? "" : "\n\nConfigured behavior: bg_wait is disabled by config.waitTool or PI_SUBAGENT_WAIT_TOOL_ENABLED and returns immediately without blocking."}`;
 	const execute: ToolDefinition<typeof SubagentWaitParams, Details>["execute"] = async (_id, params, signal, onUpdate, ctx) => finalizeToolResult(await waitForSubagents(params, signal, {
 		state,
-		nestedRootRunId: child?.nestedRootRunId,
-		requireResults: child !== undefined,
 		events: pi.events,
 		enabled,
 		...(defaultTimeoutMs !== undefined ? { defaultTimeoutMs } : {}),
