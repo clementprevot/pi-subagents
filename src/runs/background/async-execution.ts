@@ -1846,7 +1846,7 @@ export function executeAsyncSingle(
 		...(sessionFile ? { sessionFile } : {}),
 		cwd: runnerCwd,
 		...(model ? { model } : {}),
-		...(params.fast ?? recoveryAgentConfig.fast ? { fast: params.fast ?? recoveryAgentConfig.fast } : {}),
+		...((params.fast ?? recoveryAgentConfig.fast) !== undefined ? { fast: params.fast ?? recoveryAgentConfig.fast } : {}),
 		...(recoveryAgentConfig.modelProvider ? { modelProvider: recoveryAgentConfig.modelProvider } : {}),
 		...(modelOrigin === "inherited" ? { modelOverrideFromParent: true } : {}),
 		modelOrigin,
