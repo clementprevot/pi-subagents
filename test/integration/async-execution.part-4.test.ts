@@ -178,9 +178,21 @@ const args = process.argv.slice(2);
 if (args.includes('--version')) { console.log('wt v0.75.0'); process.exit(0); }
 if (args.includes('--help')) { console.log('--create --base --no-cd --no-hooks --format'); process.exit(0); }
 if (${allocatorFailure}) require('node:child_process').execFileSync('git', ['branch', args[args.indexOf('--create') + 1]], { cwd: ${JSON.stringify(repo)} });
-const socket = require('node:net').connect(${port}, '127.0.0.1', () => socket.write('ready'));
-socket.on('data', data => {
- if (data.toString() === 'release') { socket.end(); if (${allocatorFailure}) process.exitCode = 1; else console.log('{}'); }
+// Complete the setup stdin contract before exposing the independent release gate.
+// Otherwise the hook can exit before the runner writes input and cause EPIPE.
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+ if (!${allocatorFailure}) {
+  const setup = JSON.parse(input);
+  require('node:assert/strict').equal(setup.runId, ${JSON.stringify(`${id}-s0`)});
+  require('node:assert/strict').equal(setup.repoRoot, ${JSON.stringify(fs.realpathSync(repo))});
+ }
+ const socket = require('node:net').connect(${port}, '127.0.0.1', () => socket.write('ready'));
+ socket.on('data', data => {
+  if (data.toString() === 'release') { socket.end(); if (${allocatorFailure}) process.exitCode = 1; else console.log('{}'); }
+ });
 });
 setTimeout(() => process.exit(90), 15000).unref();
 `, { mode: 0o755 });
