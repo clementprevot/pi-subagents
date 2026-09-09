@@ -26,10 +26,6 @@ const REVIEW_ONLY_PATTERNS = [
 	/\breturn findings only\b/i,
 ];
 
-// Workflow tasks sometimes state a read-only boundary as a comma-separated
-// noun list (for example, "No source edits, commits, or pushes"). Unlike a
-// blanket prohibition, remove this assertion before checking for a later
-// implementation imperative.
 const NO_EDIT_BOUNDARY_ASSERTION_PATTERN = /\bno\s+(?:source\s+)?edits?\s*,\s*(?:commits?|pushes?|merges?|installs?|changes?|writes?)\b/i;
 
 const REVIEWER_REQUIRED_EDIT_PATTERNS = [
@@ -111,13 +107,7 @@ const WORKER_IMPLEMENTATION_PATTERNS = [
 	/\bdo those fixes\b/i,
 ];
 
-// Once an explicit read-only marker has been stripped, keep common imperative
-// verbs visible even when their target is a project-specific noun (for example,
-// "Without edits, update the parser"). Output-only nouns remain excluded.
 const FOLLOW_ON_IMPLEMENTATION_PATTERN = /\b(?:fix|patch|update|add|remove|replace|create|delete)\s+(?!(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?[a-z][\w./-]*/i;
-
-// Advisory how-to wording is stripped with other non-imperative markers so
-// "explain how to update" cannot leak into the later write-intent match.
 const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/i;
 
 const GENERAL_IMPLEMENTATION_PATTERNS = [
@@ -158,13 +148,10 @@ interface NoEditProhibitionAnalysis {
 }
 
 function analyzeNoEditProhibitions(taskText: string): NoEditProhibitionAnalysis {
-	const reviewOnly = REVIEW_ONLY_PATTERNS.some((pattern) => pattern.test(taskText));
-	const noTools = NO_TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(taskText));
 	const readOnlyBoundary = NO_EDIT_BOUNDARY_ASSERTION_PATTERN.test(taskText);
-	let present = reviewOnly || noTools || readOnlyBoundary;
-	// Review-only/no-tool wording is a read-only signal, not a blanket
-	// prohibition: a later imperative such as "implement the fix" must still
-	// win. Explicit file prohibitions are analyzed below and may be blanket.
+	let present = REVIEW_ONLY_PATTERNS.some((pattern) => pattern.test(taskText))
+		|| NO_TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(taskText))
+		|| readOnlyBoundary;
 	let blanket = false;
 	let strippedText = stripPatterns(taskText, [...REVIEW_ONLY_PATTERNS, ...NO_TOOL_INTENT_PATTERNS, ADVISORY_INFINITIVE_PATTERN]);
 	if (readOnlyBoundary) strippedText = stripPatterns(strippedText, [NO_EDIT_BOUNDARY_ASSERTION_PATTERN]);

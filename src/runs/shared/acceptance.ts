@@ -106,9 +106,6 @@ function inferLevel(input: {
 	const roleResolvesReadOnly = input.acceptanceRole !== undefined && inferredReadOnly;
 	const dynamicResolvesReadOnly = inferredReadOnly && !writeTask;
 	const riskyKeywordPattern = /\b(?:release|migration|migrate|security|data[- ]loss|destructive|post-review|fix pass)\b/;
-	// A read-only task can still need a checked acceptance review when its
-	// wording names a sensitive area. Keep this legacy keyword safeguard even
-	// though the shared intent classifier now recognizes more read-only forms.
 	const keywordRiskReadOnly = input.acceptanceRole === undefined
 		? intent.kind === "read-only" && !riskyKeywordPattern.test(task)
 		: inferredReadOnly;

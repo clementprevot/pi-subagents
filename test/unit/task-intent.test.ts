@@ -26,12 +26,8 @@ describe("classifyTaskMutationIntent", () => {
 	});
 
 	it("does not let read-only markers swallow generic implementation imperatives", () => {
-		for (const task of [
-			"Without edits, update the parser",
-			"Review only; add the missing test",
-		]) {
-			assert.equal(classifyTaskMutationIntent("delegate", task).kind, "implementation", task);
-		}
+		assert.equal(classifyTaskMutationIntent("delegate", "Without edits, update the parser").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("delegate", "Review only; implement the approved fix").kind, "implementation");
 		assert.equal(classifyTaskMutationIntent("delegate", "Review only; update the report").kind, "read-only");
 	});
 

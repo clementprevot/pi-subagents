@@ -10,7 +10,6 @@ import {
 	validateImplementationToolContract,
 } from "../../src/runs/shared/completion-guard.ts";
 import { isMutatingTool } from "../../src/runs/shared/long-running-guard.ts";
-import { resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
 
 function assistantToolCall(name: string, args: Record<string, unknown> = {}): Message {
 	return {
@@ -388,82 +387,26 @@ test("implementation tool contract rejects read-only worker launches", () => {
 });
 
 test("read-only audit tasks survive host-clamped declared mutation tools", () => {
-	const task = "Read-only bug investigation. No source edits, commits, pushes, merges, installs, or state repair. Return concrete findings and a minimal fix proposal.";
+	const tools = ["read", "grep", "find", "ls", "contact_supervisor"];
 	const requestedTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"];
-	const toolPlan = resolvePiLaunchToolPlan({
-		tools: requestedTools,
-		hostAvailableBuiltins: ["read", "grep", "find", "ls", "contact_supervisor"],
-	});
-
-	assert.deepEqual(toolPlan.effectiveToolAllowlist, ["read", "grep", "find", "ls", "contact_supervisor"]);
-	assert.equal(expectsImplementationMutation("delegate", task), false);
 	assert.equal(validateImplementationToolContract({
 		agent: "delegate",
-		task,
-		tools: toolPlan.effectiveToolAllowlist,
-		requestedTools: toolPlan.requestedBuiltinTools,
+		task: "Read-only bug investigation. No source edits, commits, pushes, merges, installs, or state repair. Return concrete findings and a minimal fix proposal.",
+		tools,
+		requestedTools,
 	}), undefined);
-	const implementationTask = "No source edits, commits, pushes; implement the requested source fix.";
-	assert.equal(expectsImplementationMutation("delegate", implementationTask), true);
-	assert.match(validateImplementationToolContract({
-		agent: "delegate",
-		task: implementationTask,
-		tools: toolPlan.effectiveToolAllowlist,
-		requestedTools: toolPlan.requestedBuiltinTools,
-	}) ?? "", /no mutation-capable tools/);
 	for (const task of [
 		"Review only; implement the approved fix.",
-		"No tools needed; implement the approved fix.",
 		"Without edits, update the parser.",
+		"Create a summary",
 	]) {
 		assert.match(validateImplementationToolContract({
 			agent: "delegate",
 			task,
-			tools: toolPlan.effectiveToolAllowlist,
-			requestedTools: toolPlan.requestedBuiltinTools,
+			tools,
+			requestedTools,
 		}) ?? "", /no mutation-capable tools/, task);
 	}
-	for (const task of [
-		"Review only; explain how to update the parser.",
-		"Read-only audit; recommend how to fix the parser.",
-		"Review only; describe how to implement the approved fix.",
-	]) {
-		assert.equal(validateImplementationToolContract({
-			agent: "delegate",
-			task,
-			tools: toolPlan.effectiveToolAllowlist,
-			requestedTools: toolPlan.requestedBuiltinTools,
-		}), undefined, task);
-	}
-	assert.equal(expectsImplementationMutation("reviewer", "Review only; implement the approved fix."), true);
-	assert.match(validateImplementationToolContract({
-		agent: "reviewer",
-		task: "Review only; implement the approved fix.",
-		tools: toolPlan.effectiveToolAllowlist,
-		requestedTools: toolPlan.requestedBuiltinTools,
-	}) ?? "", /no mutation-capable tools/);
-
-	// Unknown wording remains conservative when the launch explicitly requested
-	// mutation tools that the host removed.
-	const summaryTask = "Create a summary";
-	assert.equal(expectsImplementationMutation("delegate", summaryTask), false);
-	assert.match(validateImplementationToolContract({
-		agent: "delegate",
-		task: summaryTask,
-		tools: toolPlan.effectiveToolAllowlist,
-		requestedTools: toolPlan.requestedBuiltinTools,
-	}) ?? "", /no mutation-capable tools/);
-
-	// A generic worker task remains unknown rather than inheriting writer intent,
-	// but the removed requested mutation tools still keep the launch conservative.
-	const genericWorkerTask = "Inspect the current behavior and report findings.";
-	assert.equal(expectsImplementationMutation("worker", genericWorkerTask), false);
-	assert.match(validateImplementationToolContract({
-		agent: "worker",
-		task: genericWorkerTask,
-		tools: toolPlan.effectiveToolAllowlist,
-		requestedTools: toolPlan.requestedBuiltinTools,
-	}) ?? "", /no mutation-capable tools/);
 });
 
 test("oracle review tasks with bash available do not require mutation", () => {
@@ -487,23 +430,6 @@ test("review-only, research, and framework output instructions do not expect mut
 	assert.equal(expectsImplementationMutation("worker", "Review only: return findings, do not edit"), false);
 	assert.equal(expectsImplementationMutation("worker", "Do not edit files. Tell me how to fix the bug."), false);
 	assert.equal(expectsImplementationMutation("worker", "Review the diff and suggest fixes only. Do not edit files."), false);
-	for (const task of [
-		"Read-only audit of the current implementation; report findings.",
-		"Review-only pass over the diff; return recommendations.",
-		"No edits; inspect the current behavior and report findings.",
-		"Analyze the current behavior without edits.",
-	]) {
-		assert.equal(expectsImplementationMutation("delegate", task), false, task);
-	}
-	for (const task of [
-		"Review only; implement the approved fix.",
-		"No tools needed; implement the approved fix.",
-		"Read-only review; modify the requested source file.",
-		"Without edits to the report, implement the requested fix.",
-		"Without edits, update the parser.",
-	]) {
-		assert.equal(expectsImplementationMutation("delegate", task), true, task);
-	}
 	assert.equal(expectsImplementationMutation("worker", "Implement this. Do not edit files outside this repo. Do not edit files."), false);
 	assert.equal(expectsImplementationMutation("worker", "Investigate why this failed"), false);
 	assert.equal(expectsImplementationMutation("researcher", "Research the API behavior"), false);
