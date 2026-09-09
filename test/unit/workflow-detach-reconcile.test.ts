@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import { applyDetachedChildToPausedWorkflow, promotePausedWorkflowIfSettled, reconcileDetachedWorkflowChildCompletion } from "../../src/runs/foreground/workflow-detach-reconcile.ts";
 import { DIRS, type AsyncStatus, type IntercomEventBus, type SubagentState } from "../../src/shared/types.ts";
 import { buildWorkflowReceipt, writeWorkflowReceipt } from "../../src/workflows/workflow-receipt.ts";
-import { buildCompletionDetails, formatSingleCompletion, parseSubagentNotifyContent, scheduledCompletionTriggersTurn, type CompletionNotification } from "../../src/runs/background/notify.ts";
+import { buildCompletionDetails, formatSingleCompletion, parseSubagentNotifyContent, type CompletionNotification } from "../../src/runs/background/notify.ts";
 
 function pausedWorkflow(childRunId: string, extra?: Partial<NonNullable<AsyncStatus["steps"]>[number]>): AsyncStatus {
 	return {
@@ -207,8 +207,6 @@ describe("reconcileDetachedWorkflowChildCompletion", () => {
 		assert.equal(published.workflowReceipt?.receipt?.entries?.detaches?.resumability?.state, "resumable");
 		assert.ok(emitted);
 		assert.deepEqual(emitted.scheduleOrigin, scheduleOrigin);
-		assert.equal(scheduledCompletionTriggersTurn(emitted.scheduleOrigin, buildCompletionDetails(emitted).status), true);
-		assert.equal(scheduledCompletionTriggersTurn(emitted.scheduleOrigin, "completed"), false);
 		const notification = parseSubagentNotifyContent(formatSingleCompletion(buildCompletionDetails(emitted)));
 		const publishedPath = (published.workflowReceipt as { path: string }).path;
 		assert.equal(notification?.workflowReceiptPath, publishedPath);

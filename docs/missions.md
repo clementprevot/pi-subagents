@@ -122,7 +122,7 @@ Behavior:
 - An optional top-level `baseRef` selects the safe Git ref used by managed worktrees (default `HEAD`); it is persisted with the schedule and forwarded on every fire. The source checkout must still be clean.
 - Definitions, bounded history, append-only events, and per-run receipts are stored with mode `0600`.
 - `overlap` is currently fixed to `skip`; `catchUp` supports `latest` (default) and `none`.
-- `quiet` defaults to `false` and can be persisted only on recurring (`every`) schedules. With `quiet: true`, a successful automatic fire still posts its visible completion notice, but neither that notice nor the incremental notices for its successful workflow children trigger a parent turn. Failed, stopped, or paused outcomes wake the session as before, so nothing fails silently. One-shot `at` schedules and `schedule.run` stay noisy unless that specific launch passes `quiet: true`. The persisted flag is shown by `schedule.show`.
+- `quiet` persists only on recurring (`every`) schedules. Successful automatic fires stay visible without a parent turn; failed, stopped, or paused outcomes still wake the session. One-shot `at` schedules and `schedule.run` stay noisy unless that launch passes `quiet: true`.
 - `schedule.run-due` lets an external launcher start due project work without making `pi-subagents` a daemon.
 - Calendar recurrence, cron, queue/replace overlap, and the schedule TUI inspector are intentionally deferred to the next slice.
 - The old `schedule`, `schedule-list`, `schedule-status`, and `schedule-cancel` actions were removed in a hard cutover.

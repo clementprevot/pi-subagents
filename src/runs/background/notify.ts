@@ -318,11 +318,6 @@ export function formatSingleCompletion(details: SubagentNotifyDetails): string {
 		.join("\n");
 }
 
-/**
- * A quiet schedule keeps its notices visible but a routine success must not
- * wake the parent. Failed, paused, and stopped outcomes always trigger a turn
- * so nothing fails silently.
- */
 export function scheduledCompletionTriggersTurn(origin: ScheduleOrigin | undefined, outcome: string): boolean {
 	return !(origin?.quiet === true && outcome === "completed");
 }

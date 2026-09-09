@@ -54,7 +54,6 @@ export interface ScheduleRecord {
 	timeoutMs?: number;
 	paused: boolean;
 	sessionOnly?: boolean;
-	/** Opt-in for recurring schedules: a successful automatic fire posts its visible notice without triggering a parent turn. */
 	quiet?: boolean;
 	ownerSessionFile?: string;
 	createdAt: string;
@@ -814,7 +813,7 @@ export class ScheduledRunManager {
 		await this.launch(store, schedule, planned, "timer", true);
 	}
 
-	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean, explicitQuiet?: boolean): Promise<ScheduleRunRecord> {
+	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean, quiet?: boolean): Promise<ScheduleRunRecord> {
 		const now = this.now();
 		const run: ScheduleRunRecord = { schemaVersion: 1, id: this.randomId(), scheduleId: schedule.id, plannedAt: timestamp(planned), dueReason, state: "running", startedAt: timestamp(now) };
 		if (schedule.activeRunId) {
@@ -856,7 +855,7 @@ export class ScheduledRunManager {
 		store.write(schedule);
 		store.writeRun(schedule, run, "schedule.run.started");
 		try {
-			const result = await this.deps.launch(executionParams(schedule, dueReason === "manual" ? explicitQuiet === true : schedule.quiet === true), this.requireContext(store), new AbortController().signal);
+			const result = await this.deps.launch(executionParams(schedule, dueReason === "manual" ? quiet === true : schedule.quiet === true), this.requireContext(store), new AbortController().signal);
 			const asyncId = result.details?.asyncId ?? result.details?.runId;
 			if (result.isError || !asyncId) throw new Error(result.content.find((item) => item.type === "text")?.text ?? "Scheduled launch failed.");
 			run.asyncId = asyncId;

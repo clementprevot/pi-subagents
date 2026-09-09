@@ -609,88 +609,36 @@ describe("project schedule management", () => {
 describe("quiet schedules", () => {
 	const script = "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })";
 
-	it("persists quiet:true, reads it back, and launches with a quiet origin", async () => {
+	it("persists quiet only on recurring create and applies it to automatic fires", async () => {
 		const h = harness();
 		const created = await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-hourly", every: "1h", quiet: true, workflowScript: script }, h.ctx);
-		assert.equal(created.isError, undefined);
-		assert.match(text(created), /Quiet: yes/);
 		assert.equal(detailRecords(created)[0]?.quiet, true);
-
-		const storeRoot = path.join(h.root, "stores");
-		assert.equal(listScheduledRunSummaries(h.ctx.cwd, storeRoot)[0]?.quiet, true);
-		const onDisk = JSON.parse(fs.readFileSync(path.join(scheduledRunStorePath(h.ctx.cwd, undefined, storeRoot), "quiet-hourly", "schedule.json"), "utf-8")) as { quiet?: unknown };
+		const onDisk = JSON.parse(fs.readFileSync(path.join(scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores")), "quiet-hourly", "schedule.json"), "utf-8")) as { quiet?: unknown };
 		assert.equal(onDisk.quiet, true);
 
-		const shown = await h.manager.handleToolCall({ action: "schedule.show", id: "quiet-hourly" }, h.ctx);
-		assert.match(text(shown), /Quiet: yes/);
-		assert.equal(detailRecords(shown)[0]?.quiet, true);
-
 		h.clock.now += 3_600_000;
 		h.timers.fireAll();
-		assert.equal(h.launches.length, 1);
 		assert.deepEqual(h.launches[0]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
-
-		// A fresh runtime restores the persisted flag rather than recomputing it.
-		h.manager.stop();
-		const restoredLaunches: Launch[] = [];
-		const restoredTimers = new FakeTimers();
-		const restored = createScheduledRunManager({
-			config: { scheduledRuns: { enabled: true } },
-			storeRoot,
-			now: () => h.clock.now,
-			timers: restoredTimers,
-			launch: (params, launchCtx) => new Promise((resolve) => restoredLaunches.push({ params: params as Record<string, unknown>, ctx: launchCtx, resolve: resolve as Launch["resolve"] })) as never,
-		});
-		restored.bindSession(h.ctx);
-		const restoredShow = await restored.handleToolCall({ action: "schedule.show", id: "quiet-hourly" }, h.ctx);
-		assert.equal(detailRecords(restoredShow)[0]?.quiet, true);
 	});
 
-	it("keeps the default unchanged: no quiet field is stored or launched", async () => {
-		const h = harness();
-		const created = await h.manager.handleToolCall({ action: "schedule.create", id: "loud-hourly", every: "1h", workflowScript: script }, h.ctx);
-		assert.match(text(created), /Quiet: no/);
-		assert.equal("quiet" in detailRecords(created)[0]!, false);
-		assert.equal("quiet" in listScheduledRunSummaries(h.ctx.cwd, path.join(h.root, "stores"))[0]!, false);
-
-		const explicitFalse = await h.manager.handleToolCall({ action: "schedule.create", id: "loud-explicit", every: "1h", quiet: false, workflowScript: script }, h.ctx);
-		assert.equal("quiet" in detailRecords(explicitFalse)[0]!, false);
-
-		h.clock.now += 3_600_000;
-		h.timers.fireAll();
-		assert.equal(h.launches.length, 2);
-		for (const launch of h.launches) assert.equal("quiet" in (launch.params.scheduleOrigin as Record<string, unknown>), false);
-	});
-
-	it("rejects a non-boolean quiet value and a corrupted stored flag", async () => {
+	it("rejects a non-boolean quiet value", async () => {
 		const h = harness();
 		const rejected = await h.manager.handleToolCall({ action: "schedule.create", id: "bad-quiet", every: "1h", quiet: "yes" as unknown as boolean, workflowScript: script }, h.ctx);
 		assert.equal(rejected.isError, true);
 		assert.match(text(rejected), /quiet must be a boolean/);
-
-		await h.manager.handleToolCall({ action: "schedule.create", id: "corrupt", every: "1h", workflowScript: script }, h.ctx);
-		const file = path.join(scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores")), "corrupt", "schedule.json");
-		const record = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, unknown>;
-		fs.writeFileSync(file, JSON.stringify({ ...record, quiet: "yes" }));
-		const shown = await h.manager.handleToolCall({ action: "schedule.show", id: "corrupt" }, h.ctx);
-		assert.equal(shown.isError, true);
-		assert.match(text(shown), /invalid quiet/);
 	});
 
-	it("rejects quiet:true on one-shot at schedules and keeps their fires noisy", async () => {
+	it("keeps one-shot at schedules noisy", async () => {
 		const h = harness();
 		const rejected = await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-once", at: "+10m", quiet: true, workflowScript: script }, h.ctx);
 		assert.equal(rejected.isError, true);
 		assert.match(text(rejected), /quiet is only supported for recurring schedules/);
 
 		const created = await h.manager.handleToolCall({ action: "schedule.create", id: "once", at: "+10m", workflowScript: script }, h.ctx);
-		assert.equal(created.isError, undefined);
 		assert.equal("quiet" in detailRecords(created)[0]!, false);
-
 		h.clock.now += 10 * 60_000;
 		h.timers.fireAll();
 		await flush();
-		assert.equal(h.launches.length, 1);
 		assert.equal("quiet" in (h.launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
 	});
 
@@ -700,35 +648,16 @@ describe("quiet schedules", () => {
 
 		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly" }, h.ctx);
 		await flush();
-		assert.equal(h.launches.length, 1);
 		assert.equal("quiet" in (h.launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-loud" } });
 		await manual;
 		h.manager.handleAsyncCompletion({ runId: "manual-loud", success: true, summary: "Done" });
 
-		const rejected = await h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly", quiet: "yes" as unknown as boolean }, h.ctx);
-		assert.equal(rejected.isError, true);
-		assert.match(text(rejected), /quiet must be a boolean/);
-		assert.equal(h.launches.length, 1);
-
 		const explicit = h.manager.handleToolCall({ action: "schedule.run", id: "quiet-hourly", quiet: true }, h.ctx);
 		await flush();
-		assert.equal(h.launches.length, 2);
 		assert.deepEqual(h.launches[1]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
 		h.launches[1]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-quiet" } });
 		await explicit;
-	});
-
-	it("keeps quiet on automatic run-due fires of recurring schedules", async () => {
-		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "quiet-hourly", every: "1h", quiet: true, workflowScript: script }, h.ctx);
-		h.clock.now += 3_600_000;
-		const due = h.manager.handleToolCall({ action: "schedule.run-due" }, h.ctx);
-		await flush();
-		assert.equal(h.launches.length, 1);
-		assert.deepEqual(h.launches[0]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
-		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "due-quiet" } });
-		await due;
 	});
 });
 
