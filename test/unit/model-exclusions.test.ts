@@ -221,7 +221,11 @@ describe("model exclusions — transient recovery probes", () => {
 	it("does not claim an ordinary fallback candidate after a sibling was recorded", () => {
 		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
 		assert.equal(claimLaunchTransientRecoveryProbe(["openai/gpt-4", "anthropic/claude"], "openai/gpt-4").status, "not-eligible");
+		assert.equal(claimLaunchTransientRecoveryProbe(["openai/gpt-4"], "openai/gpt-4").status, "not-eligible");
 		assert.equal(claimLaunchTransientRecoveryProbe(["openai/gpt-4"], "openai/gpt-4", { recovering: true }).status, "not-eligible");
+		const claimed = claimLaunchTransientRecoveryProbe(["openai/gpt-4"], "openai/gpt-4", { launchPlannedProbe: true });
+		assert.equal(claimed.status, "claimed");
+		releaseTransientModelRecoveryProbe(claimed, false);
 	});
 
 	it("elects one owner when two reclaimers observe the same stale claim", async () => {

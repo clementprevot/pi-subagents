@@ -533,9 +533,9 @@ export function claimTransientModelRecoveryProbe(candidate: string | undefined):
 export function claimLaunchTransientRecoveryProbe(
 	candidates: readonly (string | undefined)[],
 	candidate: string | undefined,
-	options?: { recovering?: boolean },
+	options?: { recovering?: boolean; launchPlannedProbe?: boolean },
 ): ModelRecoveryProbeClaim {
-	if (options?.recovering || !candidate) return { status: "not-eligible" };
+	if (!options?.launchPlannedProbe || options.recovering || !candidate) return { status: "not-eligible" };
 	const planned = planTransientModelRecoveryProbe(candidates.filter((entry): entry is string => Boolean(entry)));
 	if (!planned || planned.candidate !== candidate) return { status: "not-eligible" };
 	return claimTransientModelRecoveryProbe(candidate);

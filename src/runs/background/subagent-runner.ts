@@ -1187,6 +1187,7 @@ export async function runSingleStepInner(
 		fs.writeFileSync(ctx.outputFile, "", "utf-8");
 		const probeClaim = claimLaunchTransientRecoveryProbe(candidates, candidate, {
 			recovering: recoveringAbort || recoveryState === "readonly-continuation",
+			launchPlannedProbe: step.transientRecoveryProbe === true,
 		});
 		if (probeClaim.status === "in-flight") {
 			return omitUndefinedProperties({ agent: step.agent, output: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, error: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, exitCode: 1, context: step.context });

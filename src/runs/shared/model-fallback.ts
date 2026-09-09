@@ -429,6 +429,8 @@ export interface BuildModelCandidatesOptions {
 	primaryModelFromParent?: boolean;
 	/** How the primary model was selected. Explicit stays strict and does not rotate to fallbacks. */
 	origin?: ModelOrigin;
+	/** Set `planned` when this build returns the one launch-time recovery probe. */
+	recovery?: { planned?: boolean };
 }
 
 const ZERO_USABLE_MODEL_CANDIDATES_ERROR =
@@ -521,6 +523,7 @@ export function buildModelCandidates(
 			if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);
 			if (skippedFallback) resolveRequiredSubagentModelCandidate(skippedFallback, availableModels, preferredProvider);
 			console.warn(`[pi-subagents] Cached exclusions leave no ordinary candidate; planning one transient recovery probe for '${sanitizeModelExclusionDiagnostic(recoveryProbe.candidate, "unknown")}'.`);
+			if (options?.recovery) options.recovery.planned = true;
 			return [recoveryProbe.candidate];
 		}
 		if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);

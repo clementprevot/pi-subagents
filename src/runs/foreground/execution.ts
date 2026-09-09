@@ -1830,6 +1830,7 @@ async function runSyncCompletionInner(
 	if (!options.sshProject) systemPrompt = appendAgentRefinementOverlay(systemPrompt, { cwd: skillCwd, agentName });
 	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, options.outputPath, agent);
 
+	const recovery = { planned: false };
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
@@ -1839,6 +1840,7 @@ async function runSyncCompletionInner(
 			scope: options.modelScope,
 			primaryModelFromParent: options.modelOverrideFromParent,
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
+			recovery,
 		},
 	);
 	if (options.workflowChildPermitLaunch && candidates.length > 1) {
@@ -1967,6 +1969,7 @@ async function runSyncCompletionInner(
 			if (recoveryState === "readonly-continuation") attemptOptions.deadlineAt = continuationDeadline;
 			const probeClaim = claimLaunchTransientRecoveryProbe(modelsToTry, candidate, {
 				recovering: recoveringAbort || recoveryState === "readonly-continuation",
+				launchPlannedProbe: recovery.planned,
 			});
 			if (probeClaim.status === "in-flight") {
 				lastResult = withRunContext({
