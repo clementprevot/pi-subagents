@@ -319,6 +319,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
 		fs.writeFileSync(agentPath, `---
 name: ${agentName}
+description: Structured digest probe
 tools:
 extensions:
 systemPromptMode: replace
