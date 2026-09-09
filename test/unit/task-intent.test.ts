@@ -192,6 +192,13 @@ describe("classifyTaskMutationIntent", () => {
 		);
 		assert.equal(classifyTaskMutationIntent("worker", "Update the source file").kind, "implementation");
 		assert.equal(classifyTaskMutationIntent("worker", "Update src/auth.ts").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Update daily-update.mp3").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Fix the bug in src/foo.ts").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Fix package.json").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Patch package.json").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Fix README.md").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("delegate", "Update package.json").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Review only; fix the package.json").kind, "implementation");
 		assert.equal(classifyTaskMutationIntent("worker", "Do not modify tests; render to artifacts/daily-update.mp3").kind, "read-only");
 		assert.equal(classifyTaskMutationIntent("worker", "Do not modify tests; render to artifacts/daily-update.mp3. Then implement the fix.").kind, "implementation");
 	});

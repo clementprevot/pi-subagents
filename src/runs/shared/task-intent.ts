@@ -98,13 +98,15 @@ function stripSeverityCompounds(task: string): string {
 export { stripSeverityCompounds };
 
 // Hyphens and slashes are word boundaries, so a token like daily-update.mp3
-// or src/add.ts would otherwise look like the verbs update/add. Strip those
-// tokens before implementation matching only; acceptance still uses the raw
-// write-verb vocabulary.
+// or src/add.ts would otherwise look like the verbs update/add. Neutralize
+// only tokens that contain those verbs; leave objects such as package.json
+// so "Fix package.json" stays an implementation obligation. Acceptance still
+// uses the raw write-verb vocabulary.
 const PATH_LIKE_TOKEN_PATTERN = /[^\s]+[/\\][^\s]+|[^\s/\\]+\.[A-Za-z][A-Za-z0-9]{0,9}\b/g;
+const PATH_INTERNAL_IMPLEMENTATION_VERB = /\b(?:implement|edit|modify|refactor|delete|update|add|remove|replace|create)\b/i;
 
 function stripPathLikeTokens(task: string): string {
-	return task.replace(PATH_LIKE_TOKEN_PATTERN, " ");
+	return task.replace(PATH_LIKE_TOKEN_PATTERN, (token) => (PATH_INTERNAL_IMPLEMENTATION_VERB.test(token) ? " " : token));
 }
 
 const FIX_OR_PATCH_IMPLEMENTATION_PATTERN = /\b(?:fix|patch)\s+(?:(?:it|this|that|them|each|any|all|these|those)\b|(?:(?:a|an|the|any|all)\s+)?(?:(?:failing|failed|broken|flaky|red|cold|start|current|existing|reported|approved|known|regression|unit|integration|e2e|source|typescript|type-?script|ts|type-?check|compiler)\s+)*(?:bug|defect|issues?|problems?|failures?|regressions?|tests?|errors?|items?|typos?|code|source|implementation|component|function|module|class|method|logic|file|files|readme|docs?|changelog|package\.json|config|manifest|extension|prompt|command|lint(?:ing)?|build|ci|type-?check|type\s+checking)\b)/i;
