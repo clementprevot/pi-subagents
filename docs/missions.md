@@ -116,7 +116,7 @@ Behavior:
 - An optional top-level `baseRef` selects the safe Git ref used by managed worktrees (default `HEAD`); it is persisted with the schedule and forwarded on every fire. The source checkout must still be clean.
 - Definitions, bounded history, append-only events, and per-run receipts are stored with mode `0600`.
 - `overlap` is currently fixed to `skip`; `catchUp` supports `latest` (default) and `none`.
-- A successful `schedule.run` satisfies the next natural fire so the schedule does not double-run. A failed manual launch leaves that fire in place, including when a natural timer overlapped while attachment was still pending.
+- A successful `schedule.run` satisfies the next natural fire; a failed manual launch does not skip it.
 - `schedule.run-due` lets an external launcher start due project work without making `pi-subagents` a daemon.
 - Calendar recurrence, cron, queue/replace overlap, and the schedule TUI inspector are intentionally deferred to the next slice.
 - The old `schedule`, `schedule-list`, `schedule-status`, and `schedule-cancel` actions were removed in a hard cutover.

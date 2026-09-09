@@ -691,21 +691,16 @@ export class ScheduledRunManager {
 		}
 		const run = await this.launch(store, schedule, this.now(), "manual", false);
 		const updated = store.get(schedule.id);
-		if (run.state === "running") this.satisfyManualLaunch(store, updated);
-		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.\nNext natural fire: ${updated.trigger.nextRunAt ?? "none (schedule satisfied)"}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
-	}
-
-	private satisfyManualLaunch(store: ScheduleStore, schedule: ScheduleRecord): void {
-		const now = this.now();
-		if (schedule.trigger.kind === "interval") {
-			schedule.trigger.nextRunAt = timestamp(now + schedule.trigger.everyMs);
-		} else {
-			schedule.trigger.nextRunAt = undefined;
+		if (run.state === "running") {
+			const now = this.now();
+			if (updated.trigger.kind === "interval") updated.trigger.nextRunAt = timestamp(now + updated.trigger.everyMs);
+			else updated.trigger.nextRunAt = undefined;
+			updated.updatedAt = timestamp(now);
+			store.write(updated);
+			store.appendEvent(updated, "schedule.manual_satisfied");
+			this.arm(updated, store);
 		}
-		schedule.updatedAt = timestamp(now);
-		store.write(schedule);
-		store.appendEvent(schedule, "schedule.manual_satisfied");
-		this.arm(schedule, store);
+		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
 	}
 
 	private async runDue(): Promise<AgentToolResult<Details>> {
@@ -880,13 +875,7 @@ export class ScheduledRunManager {
 			run.error = error instanceof Error ? error.message : String(error);
 			const latest = store.get(schedule.id);
 			latest.activeRunId = undefined;
-			if (!advance) {
-				if (latest.trigger.kind === "interval") {
-					latest.trigger.nextRunAt = nextRunAtBeforeClaim ?? latest.trigger.nextRunAt;
-				} else {
-					latest.trigger.nextRunAt = nextRunAtBeforeClaim;
-				}
-			}
+			if (!advance && nextRunAtBeforeClaim) latest.trigger.nextRunAt = nextRunAtBeforeClaim;
 			latest.updatedAt = timestamp(this.now());
 			store.write(latest);
 			store.writeRun(latest, run, "schedule.run.failed");

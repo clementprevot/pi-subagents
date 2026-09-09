@@ -16,7 +16,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
-- A manual `schedule.run` that attaches a run satisfies the next natural fire, so manually-run schedules no longer double-fire. A failed manual launch restores that fire when a natural timer overlapped during attachment (#2052). Thanks to [@brandonmwest](https://github.com/brandonmwest) for #2052.
+- A manual `schedule.run` that attaches a run satisfies the next natural fire, so manually-run schedules no longer double-fire (#2052). Thanks to [@brandonmwest](https://github.com/brandonmwest) for #2052.
 - Preserve explicit read-only task intent after host capability clamping, while still blocking implementation tasks that lack mutation tools. Thanks to [@stekman08](https://github.com/stekman08) for #2060.
 - Parse the full stdout of `orca terminal create --json` so the observer manifest stores `orcaHandle` / `orcaTabId` / `orcaTitle` instead of `orcaRaw: "}"`. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Keep workflow child tool exposure aligned with advertised agent tools when auto-discovered extensions wrap Pi builtins, and relocate auto-selected extension-repo worktrees outside Pi's extension auto-discovery directory (#2059).
