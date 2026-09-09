@@ -9,6 +9,9 @@ import { steerAsyncRun } from "../../src/runs/foreground/async-steering-action.t
 import { createSteeringStatus, recordSteeringRequest, updateSteeringTarget } from "../../src/runs/background/steering.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { ASYNC_DIR, type AsyncStatus, type Details, type SteeringRecoveryDescriptor, type SteeringTargetState, type SubagentState } from "../../src/shared/types.ts";
+import { runChildSession, type StepSteerHandler } from "../../src/runs/background/run-child-session.ts";
+import type { ChildSession, ChildSessionFactory } from "../../src/runs/shared/child-session.ts";
+import type { InProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 
 function createState(): SubagentState {
 	return {
@@ -28,6 +31,49 @@ function createState(): SubagentState {
 		resultFileCoalescer: { schedule: () => false, clear: () => {} },
 	};
 }
+
+it("does not acknowledge queued steering when the child transport rejects it", async () => {
+	let register!: (handler: StepSteerHandler) => void;
+	const registered = new Promise<StepSteerHandler>((resolve) => { register = resolve; });
+	let releasePrompt!: () => void;
+	const promptBlocked = new Promise<void>((resolve) => { releasePrompt = resolve; });
+	const outcomes: unknown[] = [];
+	let stop: (() => void) | undefined;
+	let listener: ((event: any) => void) | undefined;
+	const session: ChildSession = {
+		subscribe(callback) { listener = callback; return () => {}; },
+		async prompt() {
+			await promptBlocked;
+			listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", model: "mock/model" } });
+			listener?.({ type: "agent_end", messages: [], willRetry: false });
+			listener?.({ type: "agent_settled" });
+		},
+		async steer() { throw new Error("transport rejected steer"); },
+		async followUp() {}, async abort() {}, async dispose() {},
+		messages: [], sessionId: "rejected-steer", modelId: "mock/model",
+	};
+	const factory: ChildSessionFactory = { async create() { return session; }, async dispose() {} };
+	const run = runChildSession({
+		factory,
+		launch: { session: {
+			cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false,
+			hooks: [], noSkills: true, noContextFiles: true,
+			runtime: { fanoutChild: false, fast: false, depth: 1, waitTool: { enabled: false } },
+		} } as InProcessChildLaunch,
+		prompt: "wait",
+		appendChildEvent() {}, writeOutputLine() {},
+		registerStop(handler) { stop = handler; },
+		registerSteer(handler) { if (handler) register(handler); },
+		onSteerOutcome(_request, outcome) { outcomes.push(outcome); },
+	});
+	const steer = await registered;
+	const result = await steer({ type: "steer", id: "rejected", ts: Date.now(), message: "new direction" });
+	assert.deepEqual(result, { state: "failed", message: "transport rejected steer" });
+	assert.deepEqual(outcomes, []);
+	stop?.();
+	releasePrompt();
+	await run;
+});
 
 let statusWriteMtimeMs = Date.now();
 const budgetDirectories: string[] = [];

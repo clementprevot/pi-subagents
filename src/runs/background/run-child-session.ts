@@ -675,7 +675,6 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 						deliveryStatus: "queued",
 						message: followUp ? "Pi queued the follow-up input." : "Pi accepted the steering input.",
 					};
-					input.onSteerOutcome?.(request, queued);
 					try {
 						if (followUp) await created.followUp(text);
 						else await created.steer(text);
