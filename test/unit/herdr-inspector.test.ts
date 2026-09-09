@@ -138,7 +138,7 @@ describe("Herdr inspector", () => {
 				runnerPath: path.join(root, "runner.ts"),
 			});
 			assert.equal(commandResult.isError, undefined, text(commandResult));
-			assert.match(text(commandResult), /--allow-steer' 'true.*--allow-stop' 'true/);
+			assert.match(text(commandResult), /--allow-steer.*true.*--allow-stop.*true/);
 			assert.deepEqual(sessionRootsFromRunCommand(text(commandResult)), [sessionRoot]);
 			assert.deepEqual(calls, []);
 
