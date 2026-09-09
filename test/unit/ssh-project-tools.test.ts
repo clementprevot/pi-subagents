@@ -126,6 +126,9 @@ test("SSH write sends exact remote path and bytes, overwrites, and fails closed"
 		assert(invocations[0]!.script.includes('mkdir -- "./$comp"'));
 		assert(!invocations[0]!.script.includes("mkdir -p"));
 		assert(invocations[0]!.script.includes('dd of="./$base" oflag=nofollow'));
+		assert(invocations[0]!.script.includes('cd -- "$box"'));
+		assert(invocations[0]!.script.includes('dd of="./p"'));
+		assert(!invocations[0]!.script.includes('dd of="$box/p"'));
 		assert(!invocations[0]!.script.includes(first));
 		assert(invocations[1]!.script.includes(sshQuote(Buffer.from(second, "utf8").toString("base64"))));
 		assert(!invocations[1]!.script.includes(sshQuote(Buffer.from(first, "utf8").toString("base64"))));
@@ -178,6 +181,9 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 	fs.symlinkSync(path.join(outside, "escape.txt"), path.join(remote, "leaf"));
 	fs.symlinkSync(outside, path.join(remote, "parent"));
 	fs.symlinkSync(path.join(outside, "missing"), path.join(remote, "dangling"));
+	fs.symlinkSync(path.relative(remote, path.join(outside, "escape.txt")), path.join(remote, "rel-leaf"));
+	fs.symlinkSync(path.relative(remote, outside), path.join(remote, "rel-parent"));
+	fs.symlinkSync(path.relative(remote, path.join(outside, "missing")), path.join(remote, "rel-dangle"));
 	fs.mkdirSync(path.join(remote, "realdir"));
 	fs.symlinkSync(path.join(outside, "escape.txt"), path.join(remote, "realdir", "swap.txt"));
 	const bound = snapshotSshProjectBootstrap({ target: "user@host", projectDir: remote, childProfile: "fresh-native-read-bash", localRuntime: { cwd: local, agentDir: local, projectTrusted: false, noContextFiles: true, projectDiscovery: "disabled" } });
@@ -190,6 +196,12 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
 		assert(!fs.existsSync(path.join(outside, "nested.txt")));
 		await assert.rejects(() => write.execute("dangling", { path: "dangling/sub/file.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		assert(!fs.existsSync(path.join(outside, "missing")));
+		await assert.rejects(() => write.execute("rel-leaf", { path: "rel-leaf", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		await assert.rejects(() => write.execute("rel-parent", { path: "rel-parent/nested.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		await assert.rejects(() => write.execute("rel-dangle", { path: "rel-dangle/sub/file.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
+		assert(!fs.existsSync(path.join(outside, "nested.txt")));
 		assert(!fs.existsSync(path.join(outside, "missing")));
 		await assert.rejects(() => write.execute("swap", { path: "realdir/swap.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
@@ -204,6 +216,14 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		const mkdirLeaf = cp.spawnSync("/bin/mkdir", ["--", planted], { encoding: "utf8" });
 		assert.notEqual(mkdirLeaf.status, 0);
 		assert(!fs.existsSync(path.join(outside, "deep")));
+		const box = path.join(remote, ".pi-ssh-w-swap");
+		fs.mkdirSync(box);
+		fs.rmdirSync(box);
+		fs.symlinkSync(outside, box);
+		const boxFollow = cp.spawnSync("/bin/dd", ["of=" + path.join(box, "p")], { input: "ESCAPED", encoding: "utf8" });
+		assert.equal(boxFollow.status, 0);
+		assert.equal(fs.readFileSync(path.join(outside, "p"), "utf8"), "ESCAPED");
+		fs.rmSync(path.join(outside, "p"), { force: true });
 		const open = cp.spawnSync("/bin/dd", ["of=" + path.join(remote, "realdir", "swap.txt"), "oflag=nofollow"], { input: "ESCAPED", encoding: "utf8" });
 		assert.notEqual(open.status, 0);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
