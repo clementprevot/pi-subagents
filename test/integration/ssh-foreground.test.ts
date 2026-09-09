@@ -17,6 +17,10 @@ function createRepoTempDir(prefix: string): string {
 	return fs.mkdtempSync(path.join(tmpRoot, prefix));
 }
 
+function importHref(file: string): string {
+	return JSON.stringify(pathToFileURL(file).href);
+}
+
 test("npm-installed SSH launcher loads TypeScript without NODE_OPTIONS", { timeout: 60_000 }, () => {
 	const root = createRepoTempDir("ssh-installed-");
 	const installed = path.join(root, "node_modules/pi-subagents");
@@ -82,7 +86,7 @@ const realSpawn=cp.spawn;cp.spawn=function(command,args,options){
  log('SSH',args);const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>{queueMicrotask(()=>child.emit('close',null));return true};let script='';child.stdin.on('data',x=>script+=x);child.stdin.on('finish',()=>{log('SCRIPT',script);const target=args[args.indexOf('--')+1];if(target==='stall')return;if(target==='fail'){queueMicrotask(()=>child.emit('close',255));return}const output=script.includes('for p in')?'/srv/project/AGENTS.md\\n'+Buffer.from(target+'_REMOTE_CONTEXT').toString('base64')+'\\n':script.includes('dd if=')?Buffer.from(target+'_REMOTE_FILE').toString('base64'):'REMOTE_BASH_OUTPUT';queueMicrotask(()=>{child.stdout.emit('data',Buffer.from(output));child.emit('close',0)})});return child;
 };for(const key of ['spawnSync','exec','execSync','execFile','execFileSync'])cp[key]=(...args)=>{log('PROCESS',{key,args,stack:new Error().stack});throw new Error('Unexpected local process')};
 globalThis.fetch=async()=>{log('NETWORK','fetch');throw new Error('Network denied')};net.Socket.prototype.connect=function(){log('NETWORK','socket');throw new Error('Network denied')};syncBuiltinESMExports();`);
-	fs.writeFileSync(provider, `import fs from 'node:fs';import {registerSubagentCapabilityCeiling} from ${JSON.stringify(path.join(repo, "src/api/capability-ceiling.ts"))};import {createAssistantMessageEventStream} from ${JSON.stringify(path.join(sdkRoot, "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js"))};
+	fs.writeFileSync(provider, `import fs from 'node:fs';import {registerSubagentCapabilityCeiling} from ${importHref(path.join(repo, "src/api/capability-ceiling.ts"))};import {createAssistantMessageEventStream} from ${importHref(path.join(sdkRoot, "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js"))};
 export default function(pi){const key=Symbol.for('proof.provider.loads');if(process.env.SSH_PROOF_RELOAD==='1'){globalThis[key]=(globalThis[key]||0)+1;fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({kind:'FACTORY'})+'\\n')}
 pi.on('session_start',(_,ctx)=>{if(process.env.SSH_PROOF_CEILING==='1')registerSubagentCapabilityCeiling({sessionId:ctx.sessionManager.getSessionId(),source:'proof',ceiling:{allowedTools:['read']}})});
 pi.on('session_start',()=>{fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({kind:'SKILL_COMMANDS',value:pi.getCommands().filter(command=>command.source==='skill').map(command=>command.name)})+'\\n')});
@@ -120,7 +124,7 @@ pi.registerProvider('ssh-proof',{baseUrl:'http://127.0.0.1:1',api:'openai-comple
 	// Actual factory/SDK behavior: a stalled remote fetch cannot occupy the common
 	// open queue. The unrelated ordinary local child reaches its model first.
 	const probe = path.join(root, "queue.mjs");
-	fs.writeFileSync(probe, `import assert from 'node:assert/strict';import * as sdk from ${JSON.stringify(path.join(sdkRoot, "dist/index.js"))};import {createDefaultChildSessionFactory} from ${JSON.stringify(path.join(repo, "src/runs/shared/child-session.ts"))};
+	fs.writeFileSync(probe, `import assert from 'node:assert/strict';import * as sdk from ${importHref(path.join(sdkRoot, "dist/index.js"))};import {createDefaultChildSessionFactory} from ${importHref(path.join(repo, "src/runs/shared/child-session.ts"))};
 const factory=createDefaultChildSessionFactory({loadPiCodingAgent:async()=>sdk});const launch={cwd:${JSON.stringify(path.join(agentDir, "ssh-control"))},storage:{kind:'memory'},model:'ssh-proof/proof-model',tools:[],extensionPaths:[${JSON.stringify(provider)}],ambientExtensions:false,hooks:[],noSkills:true,noContextFiles:true,runtime:{fanoutChild:false,depth:1,fast:false,waitTool:{enabled:false}}};
 const controller=new AbortController();const stalled=factory.create({...launch,sshProject:{target:'stall',projectDir:'/srv/project',childProfile:'fresh-native-read-bash',localRuntime:{cwd:launch.cwd,agentDir:${JSON.stringify(agentDir)},projectTrusted:false,noContextFiles:true,projectDiscovery:'disabled'}},sshSignal:controller.signal}).then(()=>{throw new Error('Unexpected stalled readiness')},error=>error);
 const local=await factory.create(launch);await local.prompt('LOCAL_QUEUE_PROOF');controller.abort();assert.match(String(await stalled),/uncertain/);
