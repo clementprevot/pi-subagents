@@ -127,7 +127,9 @@ test("SSH write sends exact remote path and bytes, overwrites, and fails closed"
 		assert(!invocations[0]!.script.includes("mkdir -p"));
 		assert(invocations[0]!.script.includes('dd of="./$base" oflag=nofollow'));
 		assert(invocations[0]!.script.includes('cd -- "$box"'));
-		assert(invocations[0]!.script.includes('dd of="./p"'));
+		assert(invocations[0]!.script.includes("set -C"));
+		assert(invocations[0]!.script.includes("> ./p"));
+		assert(!invocations[0]!.script.includes('dd of="./p"'));
 		assert(!invocations[0]!.script.includes('dd of="$box/p"'));
 		assert(!invocations[0]!.script.includes(first));
 		assert(invocations[1]!.script.includes(sshQuote(Buffer.from(second, "utf8").toString("base64"))));
@@ -224,6 +226,12 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		assert.equal(boxFollow.status, 0);
 		assert.equal(fs.readFileSync(path.join(outside, "p"), "utf8"), "ESCAPED");
 		fs.rmSync(path.join(outside, "p"), { force: true });
+		const stage = path.join(remote, ".pi-ssh-w-stage");
+		fs.mkdirSync(stage);
+		fs.symlinkSync(path.join(outside, "escape.txt"), path.join(stage, "p"));
+		const plantedLeaf = cp.spawnSync("/bin/bash", ["--noprofile", "--norc", "-o", "pipefail", "-c", "set -C; printf ESCAPED > ./p"], { cwd: stage, encoding: "utf8" });
+		assert.notEqual(plantedLeaf.status, 0);
+		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
 		const open = cp.spawnSync("/bin/dd", ["of=" + path.join(remote, "realdir", "swap.txt"), "oflag=nofollow"], { input: "ESCAPED", encoding: "utf8" });
 		assert.notEqual(open.status, 0);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
