@@ -57,7 +57,38 @@ export function buildAdvertisedAgentPrompt(
 	return render(entries);
 }
 
-export function appendAdvertisedAgentPrompt(systemPrompt: string, advertisedPrompt: string | undefined): string {
-	const base = systemPrompt.replace(ADVERTISED_AGENTS_BLOCK, "");
-	return advertisedPrompt ? `${base.trimEnd()}\n\n${advertisedPrompt}` : base;
+export function appendAdvertisedAgentPrompt(systemPrompt: string, advertisedPrompt: string | undefined): string;
+export function appendAdvertisedAgentPrompt(systemPrompt: string[], advertisedPrompt: string | undefined): string[];
+export function appendAdvertisedAgentPrompt(systemPrompt: undefined, advertisedPrompt: string | undefined): string | undefined;
+export function appendAdvertisedAgentPrompt(
+	systemPrompt: string | string[] | undefined,
+	advertisedPrompt: string | undefined,
+): string | string[] | undefined;
+export function appendAdvertisedAgentPrompt(
+	systemPrompt: string | string[] | undefined,
+	advertisedPrompt: string | undefined,
+): string | string[] | undefined {
+	if (Array.isArray(systemPrompt)) {
+		let changed = false;
+		const cleaned = systemPrompt
+			.map((part) => {
+				if (typeof part !== "string") return part;
+				const stripped = part.replace(ADVERTISED_AGENTS_BLOCK, "");
+				if (stripped !== part) changed = true;
+				return stripped;
+			})
+			.filter((b) => typeof b === "string" && b.length > 0);
+
+		if (advertisedPrompt) {
+			return [...cleaned, advertisedPrompt];
+		}
+		return changed ? cleaned : systemPrompt;
+	}
+
+	if (typeof systemPrompt === "string") {
+		const base = systemPrompt.replace(ADVERTISED_AGENTS_BLOCK, "");
+		return advertisedPrompt ? (base.trim() ? `${base.trimEnd()}\n\n${advertisedPrompt}` : advertisedPrompt) : base;
+	}
+
+	return advertisedPrompt;
 }

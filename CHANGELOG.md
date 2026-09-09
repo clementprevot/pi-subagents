@@ -53,6 +53,7 @@
 - Bound transcript previews by individual line size and total rendered body size, preserving recent context and full artifact references. Thanks to [@rtbe](https://github.com/rtbe) for #2015.
 - Await a bounded, offline model registry refresh before opening `/subagents` model and thinking pickers, and warn on refresh failures. Thanks to [@ianbmacdonald](https://github.com/ianbmacdonald) for #2008.
 - Freeze terminal FleetView detail elapsed from recorded duration or end time, omitting unknown durations while running rows keep advancing. Related to #2085 (partial); thanks to [@expoli](https://github.com/expoli).
+- Preserve input and return shapes in `appendAdvertisedAgentPrompt` with overloads for string, array, and undefined system prompt callers in `before_agent_start`. Thanks to [@luqman-v1](https://github.com/luqman-v1) for #2107.
 
 ## [0.66.0] - 2026-09-06
 
