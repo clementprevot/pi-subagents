@@ -544,10 +544,20 @@ async function waitForSessionDetachedForegroundRuns(
 ): Promise<AgentToolResult<Details>> {
 	const texts: string[] = [];
 	for (const run of runs) {
-		const current = deps.state.foregroundRuns?.get(run.runId);
-		if (!current || current.sessionId !== run.sessionId || !current.children.some((child) => child.status === "detached")) continue;
-		const one = await waitForDetachedForegroundRun(current, signal, deps, startedAt, now, pollIntervalMs, timeoutMs);
+		const one = await waitForDetachedForegroundRun(run, signal, deps, startedAt, now, pollIntervalMs, timeoutMs);
 		if (one.isError) return one;
+		if (one.details.wait?.reason === "window_elapsed") {
+			const activeRunIds = runs.filter((initial) => {
+				const current = deps.state.foregroundRuns?.get(initial.runId);
+				if (!current || current.sessionId !== initial.sessionId) return false;
+				return initial.children.some((child) => child.status === "detached"
+						&& current.children.some((candidate) => candidate.index === child.index && candidate.status === "detached"));
+			}).map((activeRun) => activeRun.runId);
+			return windowElapsedResult(
+				one.content.map((part) => part.type === "text" ? part.text : "").join("\n"),
+				activeRunIds,
+			);
+		}
 		texts.push(one.content.map((part) => part.type === "text" ? part.text : "").join("\n").trim());
 	}
 	return result(texts.filter(Boolean).join("\n") || `Waited ${formatDuration(now() - startedAt)} for remembered detached foreground run(s); done.`);
@@ -589,7 +599,10 @@ export async function waitForSubagents(
 	let providerSnapshot: BackgroundWorkSnapshot;
 	try {
 		active = activeRunsForSession(params, deps);
-		foreground = activeDetachedForegroundRuns(params, deps);
+		foreground = activeDetachedForegroundRuns(params, deps).map((run) => ({
+			...run,
+			children: run.children.map((child) => ({ ...child })),
+		}));
 		providerSnapshot = params.id ? { providers: [], items: [] } : backgroundWorkForSession(deps, startedAt);
 	} catch (error) {
 		return result(error instanceof Error ? error.message : String(error), true);
@@ -719,11 +732,11 @@ export async function waitForSubagents(
 	const recoveryNote = formatCompletionRecovery(completions);
 
 	if (waitForAll) {
-		const remainingForeground = !params.id ? activeDetachedForegroundRuns({ all: true }, deps) : [];
-		const foregroundResult = remainingForeground.length > 0
-			? await waitForSessionDetachedForegroundRuns(remainingForeground, signal, deps, startedAt, now, pollIntervalMs, timeoutMs)
+		const foregroundResult = !params.id && foreground.length > 0 && relevantAttention.length === 0
+			? await waitForSessionDetachedForegroundRuns(foreground, signal, deps, startedAt, now, pollIntervalMs, timeoutMs)
 			: undefined;
 		if (foregroundResult?.isError) return foregroundResult;
+		if (foregroundResult?.details.wait?.reason === "window_elapsed") return foregroundResult;
 		const foregroundNote = foregroundResult
 			? `\n${foregroundResult.content.map((part) => part.type === "text" ? part.text : "").join("\n")}`
 			: "";
