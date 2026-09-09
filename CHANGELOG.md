@@ -19,6 +19,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Recognize OpenRouter's status-prefixed 401 errors for configured model fallback before tool work, including watchdog reviews. Thanks to [@freezscholte](https://github.com/freezscholte) for #2077.
 - A manual `schedule.run` that attaches a run satisfies the next natural fire, so manually-run schedules no longer double-fire (#2052). Thanks to [@brandonmwest](https://github.com/brandonmwest) for #2052.
 - Wait for remembered detached foreground descendants before parent settlement, without aborting a result-bearing child on the runner grace window. Thanks to [@shaharmor](https://github.com/shaharmor) for #2051.
 - Do not report owned process-tree cleanup as `observed` when a detached descendant remains active after the owned process group exits. Thanks to [@rtbe](https://github.com/rtbe) for #2053.
