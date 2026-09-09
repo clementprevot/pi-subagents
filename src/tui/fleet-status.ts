@@ -17,9 +17,8 @@ const MAX_AGENT_ROWS = 6;
 const REFRESH_MS = 500;
 
 type Theme = ExtensionContext["ui"]["theme"];
-type ThemeFgColor = Parameters<Theme["fg"]>[0];
 
-export const FLEET_AGENT_IDENTITY_COLORS = [
+const FLEET_AGENT_IDENTITY_COLORS = [
 	"mdLink",
 	"mdHeading",
 	"syntaxFunction",
@@ -36,21 +35,15 @@ export const FLEET_AGENT_IDENTITY_COLORS = [
 	"userMessageText",
 	"mdCode",
 	"syntaxOperator",
-] as const satisfies readonly ThemeFgColor[];
+] as const satisfies readonly Exclude<Parameters<Theme["fg"]>[0], "accent" | "success" | "error" | "warning" | "muted" | "dim">[];
 
-export type FleetAgentIdentityColor = (typeof FLEET_AGENT_IDENTITY_COLORS)[number];
-
-export function fleetAgentIdentityColor(identity: string): FleetAgentIdentityColor {
+export function fleetAgentIdentityColor(identity: string): (typeof FLEET_AGENT_IDENTITY_COLORS)[number] {
 	let hash = 2166136261;
 	for (let i = 0; i < identity.length; i++) {
 		hash ^= identity.charCodeAt(i);
 		hash = Math.imul(hash, 16777619);
 	}
 	return FLEET_AGENT_IDENTITY_COLORS[(hash >>> 0) % FLEET_AGENT_IDENTITY_COLORS.length]!;
-}
-
-function colorFleetAgentLabel(theme: Theme, identity: string, text: string): string {
-	return theme.fg(fleetAgentIdentityColor(identity), text);
 }
 
 type FleetStatusTui = {
@@ -769,7 +762,7 @@ export class SubagentFleetStatus {
 		const checklist = entry.workflowWrapper && entry.workflowChecklist
 			? ` · checklist ${formatWorkflowChecklistSummary(entry.workflowChecklist)}${entry.workflowChecklist.bottleneck ? ` · bottleneck ${formatWorkflowChecklistBottleneck(entry.workflowChecklist.bottleneck)}` : ""}`
 			: "";
-		const left = `${prefix} ${this.bullet(rosterIndex, selectedIndex, theme)} ${colorFleetAgentLabel(theme, entry.agent, agent)} · ${entry.state}${checklist}`;
+		const left = `${prefix} ${this.bullet(rosterIndex, selectedIndex, theme)} ${theme.fg(fleetAgentIdentityColor(entry.agent), agent)} · ${entry.state}${checklist}`;
 		const elapsed = Date.now() - entry.startedAt;
 		const rightText = entry.projectPane
 			? `${entry.projectPane.summary ?? "—"} · ${formatFleetElapsed(Date.now() - entry.projectPane.refreshedAt)} ago`
@@ -784,7 +777,7 @@ export class SubagentFleetStatus {
 		if (row.overflow !== undefined) return truncateToWidth(`${indent}${marker} ${theme.fg("dim", `+${row.overflow} nested leaves`)}`, width);
 		const modelThinking = row.modelThinking ? ` (${row.modelThinking})` : "";
 		const activity = row.activity ? ` · ${row.activity}` : "";
-		const left = `${indent}${marker} ${nestedStatusGlyph(row.state, theme)} ${colorFleetAgentLabel(theme, row.agentIdentity ?? row.name, `${row.name}${modelThinking}`)} · ${row.state}${activity}`;
+		const left = `${indent}${marker} ${nestedStatusGlyph(row.state, theme)} ${theme.fg(fleetAgentIdentityColor(row.agentIdentity ?? row.name), `${row.name}${modelThinking}`)} · ${row.state}${activity}`;
 		const elapsed = row.startedAt !== undefined ? ` · ${formatFleetElapsed(Date.now() - row.startedAt)}` : "";
 		return truncateToWidth(`${left}${theme.fg("dim", elapsed)}`, width);
 	}
