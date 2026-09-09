@@ -246,6 +246,94 @@ describe("acknowledged steering action", () => {
 		}
 	});
 
+	it("cancels in-claim recovery when queued acceptance arrives before the claim", async () => {
+		const runId = `steer-queued-before-claim-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		writeStatus(asyncDir, runningStatus(runId));
+		let request: SteerRequest | undefined;
+		let interrupted = false;
+		let recovered = false;
+		let attemptedRecovery = false;
+		try {
+			const result = await steerAsyncRun({
+				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25,
+				kill: (_pid, signal) => { if (signal !== 0) interrupted = true; return true; },
+				onRequestQueued: (requestPath) => {
+					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
+					const routed = runningStatus(runId);
+					projectRequest(routed, request, ["routed"]);
+					writeStatus(asyncDir, routed);
+				},
+				onBeforeRecoveryClaim: () => {
+					attemptedRecovery = true;
+					assert.ok(request);
+					const accepted = runningStatus(runId);
+					projectRequest(accepted, request, ["routed"]);
+					updateSteeringTarget(accepted.steering!, request.id, 0, "queued", Date.now());
+					updateSteeringTarget(accepted.steps![0]!.steering!, request.id, 0, "queued", Date.now());
+					writeStatus(asyncDir, accepted);
+				},
+				recover: async () => { recovered = true; return successResult("replacement"); },
+			});
+			assert.equal(result.isError, undefined);
+			assert.equal(result.details.steering?.deliveryStatus, "queued");
+			assert.match(result.content[0]!.text, /Steering queued/);
+			assert.equal(interrupted, false);
+			assert.equal(recovered, false);
+			assert.equal(attemptedRecovery, true);
+			assert.ok(request);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", "claim.json")), false);
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", `${Buffer.from(request.id).toString("base64url")}.json`)), false);
+		} finally {
+			removeAsyncDir(asyncDir);
+		}
+	});
+
+	it("cancels in-claim recovery when queued acceptance arrives after the claim", async () => {
+		const runId = `steer-queued-after-claim-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		writeStatus(asyncDir, runningStatus(runId));
+		let request: SteerRequest | undefined;
+		let interrupted = false;
+		let recovered = false;
+		let claimed = false;
+		try {
+			const result = await steerAsyncRun({
+				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25,
+				kill: (_pid, signal) => { if (signal !== 0) interrupted = true; return true; },
+				onRequestQueued: (requestPath) => {
+					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
+					const routed = runningStatus(runId);
+					projectRequest(routed, request, ["routed"]);
+					writeStatus(asyncDir, routed);
+				},
+				onRecoveryCommitted: () => {
+					claimed = true;
+					assert.ok(request);
+					const accepted = runningStatus(runId);
+					projectRequest(accepted, request, ["routed"]);
+					updateSteeringTarget(accepted.steering!, request.id, 0, "queued", Date.now());
+					updateSteeringTarget(accepted.steps![0]!.steering!, request.id, 0, "queued", Date.now());
+					writeStatus(asyncDir, accepted);
+				},
+				recover: async () => { recovered = true; return successResult("replacement"); },
+			});
+			assert.equal(result.isError, undefined);
+			assert.equal(result.details.steering?.deliveryStatus, "queued");
+			assert.match(result.content[0]!.text, /Steering queued/);
+			assert.equal(interrupted, false);
+			assert.equal(recovered, false);
+			assert.equal(claimed, true);
+			assert.ok(request);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", "claim.json")), false);
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", `${Buffer.from(request.id).toString("base64url")}.json`)), false);
+		} finally {
+			removeAsyncDir(asyncDir);
+		}
+	});
+
 	it("honors an acknowledgment persisted before recovery commit without interrupting", async () => {
 		const runId = `steer-final-ack-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
