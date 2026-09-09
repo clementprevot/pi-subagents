@@ -181,6 +181,21 @@ describe("production launch path supplies hostAvailableBuiltins", () => {
 			assert.deepEqual(launch.warnings, [
 				"Agent 'test-agent': host runtime tool availability omitted [read, grep]. Requested tool names: [read, grep, bash]; effective tool allowlist: [bash]. This is a non-fatal tool-plan diagnostic, not verification of the child's runtime tool menu.",
 			]);
+			assert.throws(
+				() => buildInProcessChildLaunch({
+					host: "runner",
+					cwd,
+					childAgentName: "scout",
+					childIndex: 0,
+					sessionEnabled: false,
+					inheritProjectContext: false,
+					inheritGlobalContext: false,
+					inheritSkills: false,
+					tools: ["read", "grep", "bash"],
+					hostAvailableBuiltins: ["ipython", "bash"],
+				}),
+				/Agent 'scout': tool contract could not be satisfied.*permitted required repository tools \[read, grep\].*lane infrastructure failure/,
+			);
 		} finally {
 			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

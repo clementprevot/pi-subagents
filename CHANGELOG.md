@@ -22,6 +22,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Fail review and scout launches closed when a requested, still-permitted repository tool is missing from the host runtime, and classify that gap as a lane infrastructure failure instead of a completed review. Intentionally empty or ceiling-restricted allowlists stay valid. Remaining #2058 residual; thanks to [@nicobailon](https://github.com/nicobailon).
 - Apply the same project-local refinement overlay during launch-contract preflight that foreground execution already injects, so `launchContractDigest` matches the completed terminal. Thanks to [@Yivas](https://github.com/Yivas) for #2112.
 - Reject workflow scripts whose statically provable child launches exceed `maxSubagentSpawnsPerRun` before discovery, artifact creation, or child launch; dynamic launch counts remain advisory and retain runtime enforcement. Thanks to [@ton77v](https://github.com/ton77v) for #2101.
 - Label workflow usage as belonging to child rows instead of showing a misleading zero or overlapping wrapper totals in FleetView; preserve unrelated standalone usage in mixed summaries and distinguish summed concurrent windows from a single context window. Related to #2085; thanks to [@expoli](https://github.com/expoli).

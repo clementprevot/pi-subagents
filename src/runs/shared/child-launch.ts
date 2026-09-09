@@ -117,7 +117,8 @@ export interface BuildInProcessChildLaunchInput {
 	/**
 	 * Builtin tool names the host runtime provides. When set, child tool plans
 	 * intersect declared agent tools with this set, omitting tools the host
-	 * cannot provide and failing closed when required tools are unavailable.
+	 * cannot provide. Review/scout lanes fail closed when a requested,
+	 * still-permitted repository inspection tool is missing from that set.
 	 */
 	hostAvailableBuiltins?: readonly string[];
 }

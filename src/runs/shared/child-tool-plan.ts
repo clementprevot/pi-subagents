@@ -62,8 +62,40 @@ const FAST_MODE_ALLOWED_MODELS = new Set([
 ]);
 const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const PI_BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
+const REPOSITORY_INSPECTION_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "powershell"]);
+const REVIEW_OR_SCOUT_AGENT_PATTERN = /\b(?:reviewer|scout)\b/i;
 // These providers come from child hooks, not the host's builtin tool registry.
 const NATIVE_COORDINATION_TOOL_NAMES = new Set(["subagent", "contact_supervisor", "subagent_supervisor"]);
+
+export function isReviewOrScoutLaneAgent(agentName: string | undefined): boolean {
+	return typeof agentName === "string" && REVIEW_OR_SCOUT_AGENT_PATTERN.test(agentName);
+}
+
+export function missingPermittedRepositoryInspectionTools(
+	unavailableHostBuiltins: readonly string[],
+	excludeTools: readonly string[] = [],
+): string[] {
+	const excluded = new Set(excludeTools);
+	return unavailableHostBuiltins.filter((tool) => REPOSITORY_INSPECTION_TOOLS.has(tool) && !excluded.has(tool));
+}
+
+export function formatReviewLaneToolContractFailure(input: {
+	agentName?: string;
+	missingTools: readonly string[];
+	requestedTools?: readonly string[];
+	effectiveTools: readonly string[];
+	ceilingSources?: readonly string[];
+	excludeTools?: readonly string[];
+}): string {
+	const subject = input.agentName ? `Agent '${input.agentName}'` : "Subagent";
+	return [
+		`${subject}: tool contract could not be satisfied; host runtime does not provide permitted required repository tools [${input.missingTools.join(", ")}].`,
+		`Requested tool names: ${input.requestedTools ? `[${input.requestedTools.join(", ")}]` : "not explicitly specified"}; effective tool allowlist: [${input.effectiveTools.join(", ")}].`,
+		...(input.ceilingSources?.length ? [`Active capability ceiling sources: [${input.ceilingSources.join(", ")}].`] : []),
+		...(input.excludeTools?.length ? [`Explicit excludeTools: [${input.excludeTools.join(", ")}].`] : []),
+		"This is a lane infrastructure failure, not a completed review/scout result.",
+	].join(" ");
+}
 
 export function deriveForkPromptCacheKey(parentSessionId: string | undefined): string | undefined {
 	const parent = parentSessionId?.trim();
@@ -158,8 +190,10 @@ export interface ResolvePiLaunchToolPlanInput {
 	/**
 	 * When provided, child tool plans intersect declared builtin tools with
 	 * this set. Tools the agent declares but the host does not provide are
-	 * omitted with a non-fatal warning (tracked in `unavailableHostBuiltins`), and agents
-	 * that require unavailable tools fail closed with an explicit error.
+	 * omitted with a non-fatal warning (tracked in `unavailableHostBuiltins`).
+	 * Review/scout lanes fail closed when a requested, still-permitted
+	 * repository inspection tool is among those host omissions. Intentionally
+	 * empty or ceiling-restricted allowlists are not a minimum-tool contract.
 	 */
 	hostAvailableBuiltins?: readonly string[];
 }
@@ -494,6 +528,19 @@ export function resolvePiLaunchToolPlan(
 					]),
 				]
 			: undefined;
+	const missingPermittedRepositoryTools = input.tools !== undefined
+		? missingPermittedRepositoryInspectionTools(unavailableHostBuiltins, excludeTools)
+		: [];
+	if (missingPermittedRepositoryTools.length > 0 && isReviewOrScoutLaneAgent(input.agentName)) {
+		throw new Error(formatReviewLaneToolContractFailure({
+			agentName: input.agentName,
+			missingTools: missingPermittedRepositoryTools,
+			requestedTools: requestedToolNames,
+			effectiveTools: effectiveToolAllowlist,
+			ceilingSources: capabilityCeiling?.sources,
+			excludeTools,
+		}));
+	}
 	// Host pruning also happens without a ceiling (and therefore without an
 	// audit). Use the existing non-fatal launch warnings rather than inventing
 	// a ceiling or treating the requested allowlist as a minimum requirement.
