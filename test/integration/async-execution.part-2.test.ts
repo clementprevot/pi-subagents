@@ -348,6 +348,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		requestAsyncSteer(asyncDir, { message: "Then check the docs.", id: "consumed-follow", ts: Date.now() + 1, mode: "follow_up" });
 		requestAsyncSteer(asyncDir, { message: "Same follow-up twice.", id: "dup-a", ts: Date.now() + 2, mode: "follow_up" });
 		requestAsyncSteer(asyncDir, { message: "Same follow-up twice.", id: "dup-b", ts: Date.now() + 3, mode: "follow_up" });
+		type LiveSteering = { steering?: { recent: Array<{ id: string; targets: Array<{ state: string }> }> } };
+		await waitForAsyncState(id, (candidate) => {
+			const recent = (candidate as LiveSteering).steering?.recent ?? [];
+			return ["consumed-steer", "consumed-follow", "dup-a", "dup-b"].every((requestId) => {
+				const state = recent.find((request) => request.id === requestId)?.targets[0]?.state;
+				return state === "queued" || state === "delivered";
+			});
+		});
 		const payload = await readAsyncPayload(id);
 		assert.equal(payload.success, true, payload.results[0]?.error);
 		assert.equal(payload.results[0]?.output, "after steer");
@@ -358,9 +366,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.equal(recent.find((request) => request.id === requestId)?.targets[0]?.state, "delivered", requestId);
 			assert.equal(recent.find((request) => request.id === requestId)?.targets[0]?.reason, undefined, requestId);
 		}
-		assert.equal(terminal.steering?.delivered, 4);
-		assert.equal(terminal.steering?.failed, 0);
-		assert.equal(terminal.steering?.pending, 0);
+		assert.equal(terminal.steering?.delivered, 4, JSON.stringify(terminal.steering, null, 2));
+		assert.equal(terminal.steering?.failed, 0, JSON.stringify(terminal.steering, null, 2));
+		assert.equal(terminal.steering?.pending, 0, JSON.stringify(terminal.steering, null, 2));
 		const journal = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; requestId?: string });
 		for (const requestId of ["consumed-steer", "consumed-follow", "dup-a", "dup-b"]) {
 			assert.equal(journal.filter((event) => event.type === "subagent.steer.queued" && event.requestId === requestId).length, 1, requestId);

@@ -108,7 +108,9 @@ export function updateSteeringTarget(
 		if (fields.replacementRunId) target.replacementRunId = fields.replacementRunId;
 		return target;
 	}
-	if ((target.state === "routed" || target.state === "queued") && state !== "routed" && state !== "queued") status.pending = Math.max(0, status.pending - 1);
+	const wasPending = target.state === "routed" || target.state === "queued";
+	const nowPending = state === "routed" || state === "queued";
+	if (wasPending && !nowPending) status.pending = Math.max(0, status.pending - 1);
 	target.state = state;
 	if (state === "routed") target.routedAt = now;
 	if (state === "delivered") {
@@ -123,7 +125,7 @@ export function updateSteeringTarget(
 	if (state === "recovered") target.recoveredAt = now;
 	if (fields.reason) target.reason = fields.reason;
 	if (fields.replacementRunId) target.replacementRunId = fields.replacementRunId;
-	incrementStateCount(status, state);
+	if (!wasPending || !nowPending) incrementStateCount(status, state);
 	return target;
 }
 

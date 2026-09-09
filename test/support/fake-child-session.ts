@@ -384,6 +384,12 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 						waitForQueuedMessage(),
 					]);
 				}
+				const coalesceDeadline = Date.now() + 200;
+				let lastQueued = -1;
+				while (!record.aborted && queued.length > 0 && queued.length !== lastQueued && Date.now() < coalesceDeadline) {
+					lastQueued = queued.length;
+					await sleep(20, abortedPromise);
+				}
 				await drainQueuedBoundary(response, task);
 				if (record.aborted) return;
 				if (response.hangUntilAbort) await abortedPromise;

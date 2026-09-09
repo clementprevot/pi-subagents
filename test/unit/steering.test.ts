@@ -56,6 +56,17 @@ describe("steering lifecycle ledger", () => {
 		assert.equal(unconsumedSteerReason(false), "child completed before consuming steering");
 	});
 
+	it("does not double-count pending when a routed target becomes queued then delivered", () => {
+		const status = createSteeringStatus();
+		recordSteeringRequest(status, { id: "one", requestedAt: 1, message: "guidance", targets: [{ index: 0, state: "routed" }] });
+		assert.equal(status.pending, 1);
+		updateSteeringTarget(status, "one", 0, "queued", 2);
+		assert.equal(status.pending, 1);
+		updateSteeringTarget(status, "one", 0, "delivered", 3);
+		assert.equal(status.pending, 0);
+		assert.equal(status.delivered, 1);
+	});
+
 	it("classifies mixed target outcomes as partial", () => {
 		const status = createSteeringStatus();
 		recordSteeringRequest(status, {
