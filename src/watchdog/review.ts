@@ -3,7 +3,7 @@ import { createReadOnlyTools, convertToLlm, type ExtensionContext } from "@earen
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Model, ProviderHeaders } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
-import { buildModelCandidates, isRetryableModelFailureAttempt, resolveModelCandidate } from "../runs/shared/model-fallback.ts";
+import { buildModelCandidates, isContextOverflow, isRetryableModelFailureAttempt, resolveModelCandidate } from "../runs/shared/model-fallback.ts";
 import { agentStreamOptions } from "../shared/agent-stream-options.ts";
 import { opencodeSessionHeaders } from "../shared/opencode-session-headers.ts";
 import { resolveEffectiveThinking, splitKnownThinkingSuffix, THINKING_LEVELS, toModelInfo } from "../shared/model-info.ts";
@@ -272,7 +272,7 @@ export function createMainWatchdogReview(provider: WatchdogContextProvider, opti
 			} catch (error) {
 				if (aborted()) return { stopReason: "aborted" };
 				if (!(error instanceof WatchdogAuthError)) throw error;
-				if (!isRetryableModelFailureAttempt({ error: error.message }) || index === candidates.length - 1) throw error.cause ?? error;
+				if (isContextOverflow(error.message) || !isRetryableModelFailureAttempt({ error: error.message }) || index === candidates.length - 1) throw error.cause ?? error;
 			}
 		}
 		throw new Error("No usable watchdog model candidates.");
@@ -374,6 +374,6 @@ async function runWatchdogAttempt(ctx: ExtensionContext, request: WatchdogReview
 	const error = terminal && "errorMessage" in terminal && typeof terminal.errorMessage === "string" ? terminal.errorMessage : undefined;
 	return {
 		result: clarification ? { clarification } : { stopReason },
-		retryable: !clarification && stopReason === "error" && isRetryableModelFailureAttempt({ error, messages: agent.state.messages, toolCount }),
+		retryable: !clarification && stopReason === "error" && !isContextOverflow(error) && isRetryableModelFailureAttempt({ error, messages: agent.state.messages, toolCount }),
 	};
 }
