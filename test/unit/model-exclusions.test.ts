@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { after, afterEach, beforeEach, describe, it } from "node:test";
 import {
 	clearExclusions,
@@ -203,7 +204,7 @@ describe("model exclusions — transient recovery probes", () => {
 			version: 1,
 			exclusions: [{ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable", recordedAt: Date.now(), expiresAt: Date.now() + 60_000 }],
 		}), "utf-8");
-		const modulePath = path.resolve("src/runs/shared/model-exclusions.ts");
+		const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
 		const makeScript = (role: "a" | "b") => `
 			import { createRequire } from "node:module";
 			import { syncBuiltinESMExports } from "node:module";
@@ -223,7 +224,7 @@ describe("model exclusions — transient recovery probes", () => {
 				return value;
 			};
 			syncBuiltinESMExports();
-			const { claimTransientModelRecoveryProbe } = await import(${JSON.stringify(modulePath)});
+			const { claimTransientModelRecoveryProbe } = await import(${JSON.stringify(moduleUrl)});
 			console.log(claimTransientModelRecoveryProbe(${JSON.stringify(candidate)}).status);
 			${role === "a" ? `fs.writeFileSync(${JSON.stringify(aDone)}, "");` : ""}
 			setTimeout(() => {}, 50);
@@ -257,9 +258,9 @@ describe("model exclusions — transient recovery probes", () => {
 			recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
 			const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
 			assert.equal(claim.status, "claimed");
-			const modulePath = path.resolve("src/runs/shared/model-exclusions.ts");
+			const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
 			await runIsolatedModule(
-				`import { recordModelFailure } from ${JSON.stringify(modulePath)}; recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "invalid api key" });`,
+				`import { recordModelFailure } from ${JSON.stringify(moduleUrl)}; recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "invalid api key" });`,
 				{ ...process.env, PI_MODEL_EXCLUSIONS_PATH: store },
 			);
 			releaseTransientModelRecoveryProbe(claim, true);
@@ -287,7 +288,7 @@ describe("model exclusions — transient recovery probes", () => {
 			recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
 			const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
 			assert.equal(claim.status, "claimed");
-			const modulePath = path.resolve("src/runs/shared/model-exclusions.ts");
+			const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
 			const script = `
 				import { createRequire } from "node:module";
 				import { syncBuiltinESMExports } from "node:module";
@@ -307,7 +308,7 @@ describe("model exclusions — transient recovery probes", () => {
 					return value;
 				};
 				syncBuiltinESMExports();
-				const { recordModelFailure } = await import(${JSON.stringify(modulePath)});
+				const { recordModelFailure } = await import(${JSON.stringify(moduleUrl)});
 				recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "invalid api key" });
 				console.log("wrote");
 			`;
@@ -338,7 +339,7 @@ describe("model exclusions — transient recovery probes", () => {
 		const go = path.join(barrier, "go");
 		fs.mkdirSync(ready, { recursive: true });
 		fs.writeFileSync(store, JSON.stringify({ version: 1, exclusions: [] }), "utf-8");
-		const modulePath = path.resolve("src/runs/shared/model-exclusions.ts");
+		const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
 		const makeScript = (modelId: string, provider: string, reason: string) => `
 			import { createRequire } from "node:module";
 			import { syncBuiltinESMExports } from "node:module";
@@ -358,7 +359,7 @@ describe("model exclusions — transient recovery probes", () => {
 				return value;
 			};
 			syncBuiltinESMExports();
-			const { recordModelFailure } = await import(${JSON.stringify(modulePath)});
+			const { recordModelFailure } = await import(${JSON.stringify(moduleUrl)});
 			recordModelFailure({ modelId: ${JSON.stringify(modelId)}, provider: ${JSON.stringify(provider)}, reason: ${JSON.stringify(reason)} });
 			console.log("wrote");
 		`;
