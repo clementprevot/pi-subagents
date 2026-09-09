@@ -115,6 +115,7 @@ const WORKER_IMPLEMENTATION_PATTERNS = [
 // verbs visible even when their target is a project-specific noun (for example,
 // "Without edits, update the parser"). Output-only nouns remain excluded.
 const FOLLOW_ON_IMPLEMENTATION_PATTERN = /\b(?:fix|patch|update|add|remove|replace|create|delete)\s+(?!(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?[a-z][\w./-]*/i;
+const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/gi;
 
 const GENERAL_IMPLEMENTATION_PATTERNS = [
 	/\b(?:implement|edit|modify|refactor)\b/i,
@@ -196,7 +197,8 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
 	if (prohibitions.present) {
 		if (prohibitions.blanket) return { kind: "read-only" };
-		return hasImplementationIntent(agent, prohibitions.strippedText) || FOLLOW_ON_IMPLEMENTATION_PATTERN.test(prohibitions.strippedText)
+		const imperativeText = prohibitions.strippedText.replace(ADVISORY_INFINITIVE_PATTERN, " ");
+		return hasImplementationIntent(agent, imperativeText) || FOLLOW_ON_IMPLEMENTATION_PATTERN.test(imperativeText)
 			? { kind: "implementation" }
 			: { kind: "read-only" };
 	}

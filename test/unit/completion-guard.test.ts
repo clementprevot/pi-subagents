@@ -423,6 +423,18 @@ test("read-only audit tasks survive host-clamped declared mutation tools", () =>
 			requestedTools: toolPlan.requestedBuiltinTools,
 		}) ?? "", /no mutation-capable tools/, task);
 	}
+	for (const task of [
+		"Review only; explain how to update the parser.",
+		"Read-only audit; recommend how to fix the parser.",
+		"Review only; describe how to implement the approved fix.",
+	]) {
+		assert.equal(validateImplementationToolContract({
+			agent: "delegate",
+			task,
+			tools: toolPlan.effectiveToolAllowlist,
+			requestedTools: toolPlan.requestedBuiltinTools,
+		}), undefined, task);
+	}
 	assert.equal(expectsImplementationMutation("reviewer", "Review only; implement the approved fix."), true);
 	assert.match(validateImplementationToolContract({
 		agent: "reviewer",

@@ -35,6 +35,20 @@ describe("classifyTaskMutationIntent", () => {
 		assert.equal(classifyTaskMutationIntent("delegate", "Review only; update the report").kind, "read-only");
 	});
 
+	it("keeps advisory infinitives read-only without hiding later imperatives", () => {
+		for (const task of [
+			"Review only; explain how to update the parser.",
+			"Read-only audit; recommend how to fix the parser.",
+			"Review only; describe how to implement the approved fix.",
+		]) {
+			assert.equal(classifyTaskMutationIntent("delegate", task).kind, "read-only", task);
+		}
+		assert.equal(
+			classifyTaskMutationIntent("delegate", "Review only; explain how to update the parser, then implement the approved fix.").kind,
+			"implementation",
+		);
+	});
+
 	it("stops the prohibition object before a following implementation clause", () => {
 		for (const task of [
 			"Do not modify tests but implement the fix",
