@@ -113,10 +113,11 @@ import { MissionNotFoundError, updateMission } from "../../missions/store.ts";
 import type { MissionWorkflowChildUpdate } from "../../missions/types.ts";
 import { createMissionWorkflowState } from "../../missions/workflow-state.ts";
 import { resolveAuthorityDecision } from "../../policy/authority.ts";
-import { handleHerdrInspectorAction, HERDR_INSPECTOR_ACTIONS } from "../../inspectors/herdr/actions.ts";
+import { handleInspectorAction, INSPECTOR_ACTIONS } from "../../inspectors/actions.ts";
+import { createBuiltinInspectorPlugins } from "../../inspectors/plugins.ts";
 import { handleHerdrProjectPaneAction, HERDR_PROJECT_PANE_ACTIONS } from "../../inspectors/herdr/project-panes.ts";
 import { previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError, type WorkflowChildSettledNotification, type WorkflowLanePlan, type WorkflowReceiptResumeReference, type WorkflowScriptChildResult, type WorkflowScriptTraceEntry, type WorkflowSteerOptions, type WorkflowSteerResult } from "../../workflows/scripted-workflow.ts";
-import { formatIncrementalChildCompletion } from "../background/notify.ts";
+import { formatIncrementalChildCompletion, scheduledCompletionTriggersTurn } from "../background/notify.ts";
 import { executeWorkflowHostCommand, resolveWorkflowHostOutputClaimPath, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "../../workflows/host-command.ts";
 import { buildWorkflowReceipt, readWorkflowReceipt, workflowReceiptPath, resolveWorkflowReceiptResumeEntry, writeWorkflowReceipt, type WorkflowReceipt, type WorkflowReceiptState } from "../../workflows/workflow-receipt.ts";
 import { upsertHostStep, validHostStepNodes } from "../shared/host-step-status.ts";
@@ -406,6 +407,7 @@ export interface SubagentParamsLike {
 	at?: string;
 	every?: string;
 	sessionOnly?: boolean;
+	quiet?: boolean;
 	on?: string | number;
 	timezone?: string;
 	overlap?: "skip";
@@ -5533,7 +5535,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 											content: formatIncrementalChildCompletion(notification),
 											display: notification.outcome !== "completed",
 										},
-										{ triggerTurn: true },
+										{ triggerTurn: scheduledCompletionTriggersTurn(requestParams.scheduleOrigin, notification.outcome) },
 									);
 								} catch (sendError) {
 									console.error(`Failed to send incremental child completion notification for '${notification.childKey}':`, sendError);
@@ -6076,16 +6078,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 				return handleHerdrProjectPaneAction(action as (typeof HERDR_PROJECT_PANE_ACTIONS)[number], paramsWithResolvedCwd, { cwd: requestCwd, state: deps.state, signal });
 			}
-			if ((HERDR_INSPECTOR_ACTIONS as readonly string[]).includes(action)) {
+			if ((INSPECTOR_ACTIONS as readonly string[]).includes(action)) {
 				if (deps.allowMutatingManagementActions === false && MUTATING_MANAGEMENT_ACTIONS.has(action)) {
 					return { content: [{ type: "text", text: `Action '${action}' is not available from child-safe subagent fanout mode.` }], isError: true, details: { mode: "management", results: [] } };
 				}
 				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
-				return handleHerdrInspectorAction(action as (typeof HERDR_INSPECTOR_ACTIONS)[number], paramsWithResolvedCwd, {
+				return handleInspectorAction(action as (typeof INSPECTOR_ACTIONS)[number], paramsWithResolvedCwd, {
 					state: deps.state,
 					cwd: requestCwd,
 					...(deps.config.missions ? { missions: deps.config.missions } : {}),
 					...(deps.config.authorityPolicy ? { authorityPolicy: deps.config.authorityPolicy } : {}),
+					plugins: createBuiltinInspectorPlugins(),
 					signal,
 				});
 			}

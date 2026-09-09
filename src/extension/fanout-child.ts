@@ -28,7 +28,7 @@ function expandTilde(p: string): string {
 	return p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
 }
 
-function createChildSafeState(): SubagentState {
+export function createChildSafeState(): SubagentState {
 	return {
 		baseCwd: "",
 		currentSessionId: null,
@@ -156,7 +156,7 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI, c
 
 	const config = loadConfig();
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
-	const state = createChildSafeState();
+	const state = childConfig.runtimeState ?? createChildSafeState();
 	const executor = createSubagentExecutor({
 		pi,
 		state,

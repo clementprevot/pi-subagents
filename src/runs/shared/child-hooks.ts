@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { listBackgroundWorkProviders } from "../../api/background-work.ts";
 import { ReadonlyDrainObservation } from "./readonly-drain-observation.ts";
-import registerFanoutChildSubagentExtension from "../../extension/fanout-child.ts";
+import registerFanoutChildSubagentExtension, { createChildSafeState } from "../../extension/fanout-child.ts";
 import registerSubagentFastModeExtension from "./fast-mode-extension.ts";
 import registerSubagentPromptRuntime from "./subagent-prompt-runtime.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
@@ -132,12 +132,13 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 	let diagnostic: ChildToolDiagnostic | undefined;
 	let acknowledgedIds: string[] | undefined;
 	let completionIntentContext: ArbiterModelContext | undefined;
+	let finalDrainHeld = false;
 	const capture: OwnedCapture = {
 		toolDiagnostic: (value) => { diagnostic = value; },
 		runtimeAcknowledgements: (ids) => { acknowledgedIds = ids; },
 	};
 	Object.assign(config, capture);
-	const hooks = childHooks(config, capture);
+	const hooks = childHooks(config, capture, (held) => { finalDrainHeld = held; });
 	if (runner) {
 		hooks.push({ name: "pi-subagents:completion-intent", factory: (pi) => pi.on("session_start", (_event, childCtx) => {
 			// Retain only attempt model services and the session id string, not the live child session.
@@ -155,18 +156,27 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 		completionIntentContext: () => completionIntentContext,
 		toolDiagnostic: () => diagnostic,
 		runtimeAcknowledgedExtensions: () => acknowledgedIds ? projectRuntimeAcknowledgedExtensions(acknowledgedIds) : undefined,
+		finalDrainHeld: () => finalDrainHeld,
 	};
 }
 
-function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHookExtension[] {
+function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture, holdFinalDrain?: (held: boolean) => void): ChildHookExtension[] {
 	const snapshot = readonlyConfig(config, capture);
 	const proof: PromptProof | undefined = snapshot === undefined ? undefined : { config, snapshot, capture };
+	const runtime = Object.create(config) as ChildRuntimeConfig;
+	const ownedState = Object.getOwnPropertyDescriptor(config, "runtimeState");
+	if (!ownedState || !("value" in ownedState) || ownedState.value == null) {
+		Object.defineProperty(runtime, "runtimeState", { configurable: true, enumerable: true, writable: true, value: createChildSafeState() });
+	}
+	if (holdFinalDrain) {
+		Object.defineProperty(runtime, "holdFinalDrain", { configurable: true, enumerable: true, writable: true, value: holdFinalDrain });
+	}
 	const hooks: ChildHookExtension[] = [
 		{ name: "pi-subagents:prompt-runtime", factory: function promptRuntime(pi) {
-			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, config);
+			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, runtime);
 			proof.observation = proof.observeNext;
 			proof.observeNext = undefined;
-			registerSubagentPromptRuntime(pi, config, proof.observation);
+			registerSubagentPromptRuntime(pi, runtime, proof.observation);
 		} },
 	];
 	if (proof) {
@@ -174,6 +184,6 @@ function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHo
 		promptProofs.set(hooks[0]!.factory, proof);
 	}
 	if (config.fast) hooks.push({ name: "pi-subagents:fast-mode", factory: (pi) => registerSubagentFastModeExtension(pi) });
-	if (config.fanoutChild) hooks.push({ name: "pi-subagents:fanout-child", factory: (pi) => registerFanoutChildSubagentExtension(pi, config) });
+	if (config.fanoutChild) hooks.push({ name: "pi-subagents:fanout-child", factory: (pi) => registerFanoutChildSubagentExtension(pi, runtime) });
 	return hooks;
 }

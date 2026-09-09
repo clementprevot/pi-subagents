@@ -167,6 +167,27 @@ describe("classifyTaskMutationIntent", () => {
 		assert.equal(expectsImplementationMutation("worker", "Do not modify tests; implement the fix"), true);
 		assert.equal(expectsImplementationMutation("worker", "Review the diff and suggest fixes only. Do not edit files."), false);
 	});
+
+	it("does not treat verbs inside artifact filenames as implementation", () => {
+		const brief = "Render an audio briefing with the existing renderer to artifacts/daily-briefing.mp3.";
+		const renamed = "Render an audio briefing with the existing renderer to artifacts/daily-update.mp3.";
+		assert.equal(classifyTaskMutationIntent("worker", brief).kind, "unknown");
+		assert.equal(classifyTaskMutationIntent("worker", renamed).kind, "unknown");
+	});
+
+	it("keeps a later real imperative after a filename token", () => {
+		assert.equal(
+			classifyTaskMutationIntent("worker", "Render an audio briefing to artifacts/daily-update.mp3. Then update the source file.").kind,
+			"implementation",
+		);
+	});
+
+	it("keeps a real verb whose object is a filename", () => {
+		assert.equal(classifyTaskMutationIntent("worker", "Fix package.json").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Update daily-update.mp3").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("delegate", "Update package.json").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Review only; fix the package.json").kind, "implementation");
+	});
 });
 
 describe("taskMayMutate", () => {
