@@ -35,16 +35,11 @@ function activeProcessGroupMembers(processGroupId: number): number[] | { diagnos
 	return members;
 }
 
-function processIsActive(pid: number): boolean {
-	const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf-8" });
-	return result.status === 0 && Boolean(result.stdout.trim()) && !result.stdout.trim().startsWith("Z");
-}
-
 function knownDetachedDescendants(processGroupId: number): number[] {
 	const result = spawnSync("ps", ["-axo", "pid=,ppid=,pgid=,stat="], { encoding: "utf-8" });
 	if (result.error || result.status !== 0) return [];
 	const owned = new Set<number>();
-	const rows: { pid: number; ppid: number; pgid: number }[] = [];
+	const outside: { pid: number; ppid: number }[] = [];
 	for (const line of result.stdout.split("\n")) {
 		const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)/.exec(line);
 		if (!match || match[4]!.startsWith("Z")) continue;
@@ -52,13 +47,9 @@ function knownDetachedDescendants(processGroupId: number): number[] {
 		const ppid = Number(match[2]);
 		const pgid = Number(match[3]);
 		if (pgid === processGroupId) owned.add(pid);
-		rows.push({ pid, ppid, pgid });
+		else outside.push({ pid, ppid });
 	}
-	const detached: number[] = [];
-	for (const row of rows) {
-		if (owned.has(row.ppid) && row.pgid !== processGroupId) detached.push(row.pid);
-	}
-	return detached;
+	return outside.filter((row) => owned.has(row.ppid)).map((row) => row.pid);
 }
 
 async function waitUntilGroupTerminal(
@@ -82,9 +73,11 @@ function observed(processGroupId: number): ProcessTreeTerminal {
 	return { state: "observed", mechanism: "posix-process-group", processGroupId, verifiedAt: Date.now() };
 }
 
-function observedIfDetachedGone(processGroupId: number, detached: number[]): ProcessTreeTerminal {
-	if (detached.length === 0) return observed(processGroupId);
-	const live = detached.filter(processIsActive);
+function observedUnlessLiveDetached(processGroupId: number, detached: readonly number[]): ProcessTreeTerminal {
+	const live = detached.filter((pid) => {
+		const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf-8" });
+		return result.status === 0 && Boolean(result.stdout.trim()) && !result.stdout.trim().startsWith("Z");
+	});
 	if (live.length === 0) return observed(processGroupId);
 	return { state: "unknown", reason: "verification-failed", diagnostic: `Owned detached descendant(s) still active: ${live.join(", ")}.` };
 }
@@ -116,7 +109,7 @@ export function createOwnedProcessTreeController(
 				return { state: "unknown", reason: "signal-failed", diagnostic: term.diagnostic };
 			}
 			const termExit = await waitUntilGroupTerminal(pid, options.termGraceMs ?? DEFAULT_TERM_GRACE_MS);
-			if (termExit === false) return observedIfDetachedGone(pid, detached);
+			if (termExit === false) return observedUnlessLiveDetached(pid, detached);
 
 			const kill = signalProcess(target, "SIGKILL");
 			if (kill !== "sent" && kill !== "absent") {
@@ -129,7 +122,7 @@ export function createOwnedProcessTreeController(
 			if (killExit !== false) {
 				return { state: "unknown", reason: "verification-failed", diagnostic: killExit.diagnostic };
 			}
-			return observedIfDetachedGone(pid, detached);
+			return observedUnlessLiveDetached(pid, detached);
 		})();
 		return termination;
 	};
