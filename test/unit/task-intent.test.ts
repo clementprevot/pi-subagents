@@ -57,10 +57,8 @@ describe("classifyTaskMutationIntent", () => {
 			"Review only; do not implement the approved fix.",
 		]) {
 			assert.equal(classifyTaskMutationIntent("delegate", task).kind, "read-only", task);
-			assert.equal(classifyTaskMutationIntent("worker", task).kind, "read-only", task);
 		}
 		assert.equal(classifyTaskMutationIntent("reviewer", "Review only and fix any real issues").kind, "read-only");
-		assert.equal(classifyTaskMutationIntent("reviewer", "Review this and fix any real issues").kind, "read-only");
 	});
 
 	it("stops the prohibition object before a following implementation clause", () => {

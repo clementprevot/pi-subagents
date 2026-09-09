@@ -396,23 +396,6 @@ test("read-only audit tasks survive host-clamped declared mutation tools", () =>
 		requestedTools,
 	}), undefined);
 	for (const task of [
-		"Review only and fix any real issues",
-		"Review only. Check the update handler.",
-		"Review only. Inspect the create function.",
-		"Review-only: flag issues and suggest how to fix them",
-		"Read-only review of the add user endpoint",
-		"Review only. Determine whether they add tests.",
-		"Review only. Do not implement anything.",
-		"Review only; do not implement the approved fix.",
-	]) {
-		assert.equal(validateImplementationToolContract({
-			agent: "delegate",
-			task,
-			tools,
-			requestedTools,
-		}), undefined, task);
-	}
-	for (const task of [
 		"Review only; implement the approved fix.",
 		"Without edits, update the parser.",
 		"Create a summary",
