@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { actionResultFromSteeringStatus, claimSteeringRecovery, createSteeringStatus, recordSteeringRequest, remainingSteeringRecoveryLimits, steeringMessagePreview, steeringReceipt, terminalSteeringNoticeState, updateSteeringTarget } from "../../src/runs/background/steering.ts";
+import { actionResultFromSteeringStatus, claimSteeringRecovery, createSteeringStatus, recordSteeringRequest, remainingSteeringRecoveryLimits, steeringMessagePreview, steeringReceipt, takeMatchingAcceptedSteer, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "../../src/runs/background/steering.ts";
 import { applySteeringRecoveryAgentConfig } from "../../src/runs/background/async-resume.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 
@@ -36,6 +36,24 @@ describe("steering lifecycle ledger", () => {
 		assert.equal(status.pending, 21);
 		assert.equal(status.recent.length, 20);
 		assert.equal(status.recent[0]?.id, "request-1");
+	});
+
+	it("matches equal-text accepted steers in FIFO order exactly once", () => {
+		const accepted = [
+			{ id: "first", text: "same guidance" },
+			{ id: "second", text: "same guidance" },
+			{ id: "other", text: "different" },
+		];
+		assert.equal(takeMatchingAcceptedSteer(accepted, "same guidance")?.id, "first");
+		assert.deepEqual(accepted.map((entry) => entry.id), ["second", "other"]);
+		assert.equal(takeMatchingAcceptedSteer(accepted, "same guidance")?.id, "second");
+		assert.equal(takeMatchingAcceptedSteer(accepted, "same guidance"), undefined);
+		assert.deepEqual(accepted.map((entry) => entry.id), ["other"]);
+	});
+
+	it("describes unconsumed steers from aggregate queue evidence", () => {
+		assert.equal(unconsumedSteerReason(true), "run ended before queued follow-up delivery");
+		assert.equal(unconsumedSteerReason(false), "child completed before consuming steering");
 	});
 
 	it("classifies mixed target outcomes as partial", () => {

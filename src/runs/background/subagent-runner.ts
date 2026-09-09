@@ -97,7 +97,7 @@ import type { InheritedChildRuntime } from "../shared/child-launch.ts";
 import { buildRunnerChildLaunch } from "./runner-child-launch.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import type { ChildSessionFactory, DefaultChildSessionFactoryOptions } from "../shared/child-session.ts";
-import { getSettledReadonlyChild, runChildSession, type ChildEvent, type RunChildSessionInput, type RunChildSessionResult, type StepSteerHandler } from "./run-child-session.ts";
+import { getSettledReadonlyChild, runChildSession, type ChildEvent, type RunChildSessionInput, type RunChildSessionResult, type SteerDelivery, type StepSteerHandler } from "./run-child-session.ts";
 import { planReadonlyModelContinuation, READONLY_CONTINUATION_PROMPT, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
 import { getReadonlySessionEvidence } from "../shared/readonly-session-evidence.ts";
 import { loadRunnerChildSessionFactory } from "./runner-child-sessions.ts";
@@ -114,7 +114,7 @@ import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-f
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent } from "../shared/nested-events.ts";
 import { formatModelAttemptNote, formatSubagentModelVerificationError, isContextOverflow, isRetryableModelFailureAttempt, recordRetryableModelFailure } from "../shared/model-fallback.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
-import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, updateSteeringTarget } from "./steering.ts";
+import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
 import { evaluateCompletionMutationGuard, expectsImplementationMutation, hasMutationToolCapability, validateImplementationToolContract } from "../shared/completion-guard.ts";
 import { planCompletionEvidence, projectSettlementDiagnostic } from "../shared/completion-evidence.ts";
@@ -684,6 +684,8 @@ interface SingleStepContext {
 	registerStop?: (stop: (() => void) | undefined) => void;
 	/** Receives the live child's steer handler while its session runs. */
 	registerSteer?: (steer: StepSteerHandler | undefined) => void;
+	/** Reports a live child's later steer consumption or unconsumed settlement. */
+	onSteerOutcome?: (request: SteerRequest, delivery: SteerDelivery) => void;
 	timeoutSignal?: AbortSignal;
 	stopSignal?: AbortSignal;
 	timeoutMessage?: string;
@@ -1206,6 +1208,7 @@ export async function runSingleStepInner(
 			registerTimeout: ctx.registerTimeout,
 			registerStop: ctx.registerStop,
 			registerSteer: ctx.registerSteer,
+			onSteerOutcome: ctx.onSteerOutcome,
 			registerWatchdogStatus: (sink) => { watchdogSink = sink; },
 			timeoutMessage: ctx.timeoutMessage,
 			stopMessage: ctx.stopMessage,
@@ -2919,7 +2922,10 @@ export async function runSubagent(
 	const applySteerDelivery = (requestId: string, index: number, delivery: { state: "delivered" | "queued" | "failed"; message: string }): void => {
 		const lifecycle = steeringStatus(statusPayload);
 		const request = lifecycle.recent.find((candidate) => candidate.id === requestId);
-		if (!request || !request.targets.some((target) => target.index === index)) return;
+		const target = request?.targets.find((candidate) => candidate.index === index);
+		if (!request || !target) return;
+		if (target.state === "delivered" || target.state === "late" || target.state === "failed") return;
+		if (target.state === delivery.state) return;
 		const late = fs.existsSync(steeringMarkerPath(requestId));
 		const now = Date.now();
 		if (delivery.state === "delivered") {
@@ -3699,6 +3705,7 @@ export async function runSubagent(
 					registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 					registerStop: (stop) => registerStepStop(fi, stop),
 					registerSteer: (steer) => registerStepSteer(fi, steer),
+					onSteerOutcome: (request, delivery) => applySteerDelivery(request.id, fi, delivery),
 					timeoutSignal: timeoutAbortController.signal,
 					stopSignal: stopAbortController.signal,
 					trackedMutationEvidenceForCompletionGuard: false,
@@ -4110,6 +4117,7 @@ export async function runSubagent(
 							registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 							registerStop: (stop) => registerStepStop(fi, stop),
 							registerSteer: (steer) => registerStepSteer(fi, steer),
+							onSteerOutcome: (request, delivery) => applySteerDelivery(request.id, fi, delivery),
 							timeoutSignal: timeoutAbortController.signal,
 							stopSignal: stopAbortController.signal,
 							trackedMutationEvidenceForCompletionGuard: Boolean(worktreeSetup),
@@ -4511,6 +4519,7 @@ export async function runSubagent(
 				registerTimeout: (interrupt) => registerStepTimeout(flatIndex, interrupt),
 				registerStop: (stop) => registerStepStop(flatIndex, stop),
 				registerSteer: (steer) => registerStepSteer(flatIndex, steer),
+				onSteerOutcome: (request, delivery) => applySteerDelivery(request.id, flatIndex, delivery),
 				timeoutSignal: timeoutAbortController.signal,
 				stopSignal: stopAbortController.signal,
 				timeoutMessage,
@@ -4843,7 +4852,7 @@ export async function runSubagent(
 		for (const target of request.targets) {
 			if (target.state !== "scheduled" && target.state !== "routed" && target.state !== "queued") continue;
 			changed = true;
-			const reason = target.state === "queued" ? "run ended before queued follow-up delivery" : "child terminated before steering delivery";
+			const reason = target.state === "queued" ? unconsumedSteerReason(false) : "child terminated before steering delivery";
 			updateSteeringLifecycleTarget(request.id, target.index, "failed", Date.now(), { reason });
 			markSteeringAttention(target.index);
 			emitSteeringEvent("subagent.steer.failed", { type: "steer", id: request.id, ts: request.requestedAt, message: reason }, target.index, { reason });

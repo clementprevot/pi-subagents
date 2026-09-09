@@ -27,6 +27,7 @@ import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type Ch
 import { formatSteerMessage } from "../shared/subagent-prompt-runtime.ts";
 import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
 import type { SteerDeliveryStatus, SteerRequest } from "./control-channel.ts";
+import { takeMatchingAcceptedSteer, unconsumedSteerReason } from "./steering.ts";
 
 export interface ChildEventContext {
 	runId: string;
@@ -84,6 +85,8 @@ export interface RunChildSessionInput {
 	registerTimeout?: (interrupt: (() => void) | undefined) => void;
 	registerStop?: (stop: (() => void) | undefined) => void;
 	registerSteer?: (steer: StepSteerHandler | undefined) => void;
+	/** Consumption (or unconsumed settlement) after the child accepted a steer or follow-up. */
+	onSteerOutcome?: (request: SteerRequest, delivery: SteerDelivery) => void;
 	/** Receives the sink the child's watchdog hook reports status through; the launch's `watchdogStatus` must forward to it. */
 	registerWatchdogStatus?: (sink: ((event: ChildWatchdogStatusEvent) => void) | undefined) => void;
 	timeoutMessage?: string;
@@ -187,6 +190,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		let currentPath: string | undefined;
 		let toolCount = 0;
 		let session: ChildSession | undefined;
+		const acceptedSteers: Array<{ request: SteerRequest; text: string }> = [];
 		let unsubscribe: (() => void) | undefined;
 		let settled = false;
 		let promptSettled = false;
@@ -490,6 +494,16 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				messages.push(event.message);
 				const text = extractTextFromContent(event.message.content);
 				if (text) writeOutputText(text);
+				if (event.type === "message_end" && event.message.role === "user" && text) {
+					const matched = takeMatchingAcceptedSteer(acceptedSteers, text);
+					if (matched) {
+						input.onSteerOutcome?.(matched.request, {
+							state: "delivered",
+							deliveryStatus: "delivered",
+							message: "Child consumed the steering input.",
+						});
+					}
+				}
 
 				if (input.childWatchdog && event.type === "message_end") {
 					const next = applyChildWatchdogMessage(childWatchdogState, event.message);
@@ -549,9 +563,16 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		};
 
 		/** The child run ended (or was forced to end); fold in the outcome once the child's shutdown work is done. */
+		const failUnconsumedSteers = (): void => {
+			const reason = unconsumedSteerReason(childSessionHasQueuedMessages(session));
+			for (const entry of acceptedSteers.splice(0)) {
+				input.onSteerOutcome?.(entry.request, { state: "failed", message: reason });
+			}
+		};
 		const settle = (promptError: unknown, forced = false): void => {
 			if (settled) return;
 			settled = true;
+			failUnconsumedSteers();
 			const closed = finish();
 			const finalOutput = getFinalOutput(messages);
 			let finalError = error ?? assistantError;
@@ -648,15 +669,23 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				input.registerSteer?.(async (request) => {
 					const text = formatSteerMessage(request);
 					const followUp = request.mode === "follow_up";
+					const accepted = { request, text };
+					acceptedSteers.push(accepted);
+					const queued: SteerDelivery = {
+						state: "queued",
+						deliveryStatus: "queued",
+						message: followUp ? "Pi queued the follow-up input." : "Pi accepted the steering input.",
+					};
+					input.onSteerOutcome?.(request, queued);
 					try {
 						if (followUp) await created.followUp(text);
 						else await created.steer(text);
 					} catch (steerError) {
+						const index = acceptedSteers.indexOf(accepted);
+						if (index >= 0) acceptedSteers.splice(index, 1);
 						return { state: "failed", message: steerError instanceof Error ? steerError.message : String(steerError) };
 					}
-					return followUp
-						? { state: "queued", deliveryStatus: "queued", message: "Pi queued the follow-up input." }
-						: { state: "delivered", deliveryStatus: "delivered", message: "Pi accepted the steering input." };
+					return queued;
 				});
 				if (interrupted || timedOut || stopped) abortChild();
 				checkContinuation();

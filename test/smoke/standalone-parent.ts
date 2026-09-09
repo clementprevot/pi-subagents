@@ -111,7 +111,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 				if (mode === "child-stop") requestAsyncStop(details.asyncDir, { targetIndex: 0, childId: "step:0" });
 				if (mode === "steer") {
 					requestAsyncSteer(details.asyncDir, { id: "binary-steer", targetIndex: 0, message: "UNIQUE_STEERING_MARKER" });
-					await waitForFile(`${details.asyncDir}/events.jsonl`, (text) => text.includes('"type":"subagent.steer.delivered"'));
+					await waitForFile(`${details.asyncDir}/events.jsonl`, (text) => text.includes('"type":"subagent.steer.queued"'));
 					fs.writeFileSync("/stage/release", "go");
 				}
 			}
@@ -120,7 +120,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 				const active = JSON.parse(fs.readFileSync(`${details.asyncDir}/status.json`, "utf8"));
 				const [left, right] = active.steps.map((step: { runId: string }) => path.join(path.dirname(details.asyncDir), step.runId));
 				requestAsyncSteer(left, { id: "binary-steer", targetIndex: 0, message: "UNIQUE_STEERING_MARKER" });
-				await waitForFile(`${left}/events.jsonl`, (text) => text.includes('"type":"subagent.steer.delivered"'));
+				await waitForFile(`${left}/events.jsonl`, (text) => text.includes('"type":"subagent.steer.queued"'));
 				requestAsyncInterrupt(right);
 				await waitForFile(`${right}/status.json`, (text) => JSON.parse(text).state === "paused");
 				assert.equal(JSON.parse(fs.readFileSync(`${left}/status.json`, "utf8")).state, "running", "interrupting right must leave left running");

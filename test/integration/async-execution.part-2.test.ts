@@ -290,10 +290,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const asyncDir = path.join(ASYNC_DIR, id);
 		requestAsyncSteer(asyncDir, { message: "Focus on the tests.", id: "steer-1", ts: Date.now() });
 		requestAsyncSteer(asyncDir, { message: "Then update the docs.", id: "steer-2", ts: Date.now() + 1, mode: "follow_up" });
-		type SteeringTargets = { steering?: { recent: Array<{ id: string; targets: Array<{ index: number; state: string }> }> } };
+		type SteeringTarget = { index: number; state: string; reason?: string };
+		type SteeringTargets = { steering?: { recent: Array<{ id: string; targets: SteeringTarget[] }> } };
 		const status = await waitForAsyncState(id, (candidate) => {
 			const recent = (candidate as SteeringTargets).steering?.recent ?? [];
-			return recent.some((request) => request.id === "steer-1" && request.targets[0]?.state === "delivered")
+			return recent.some((request) => request.id === "steer-1" && request.targets[0]?.state === "queued")
 				&& recent.some((request) => request.id === "steer-2" && request.targets[0]?.state === "queued");
 		}) as AsyncStatusPayload & SteeringTargets;
 		assert.equal(status.state, "running");
@@ -305,9 +306,67 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = await readAsyncPayload(id);
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0]?.output, "steered result");
-		const eventsText = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8");
-		assert.match(eventsText, /"type":"subagent\.steer\.delivered"[^\n]*"requestId":"steer-1"/);
-		assert.match(eventsText, /"type":"subagent\.steer\.queued"[^\n]*"requestId":"steer-2"/);
+		const terminal = await waitForAsyncState(id, (candidate) => candidate.state === "complete") as AsyncStatusPayload & SteeringTargets;
+		const recent = terminal.steering?.recent ?? [];
+		assert.equal(recent.find((request) => request.id === "steer-1")?.targets[0]?.state, "failed");
+		assert.equal(recent.find((request) => request.id === "steer-2")?.targets[0]?.state, "failed");
+		assert.equal(recent.find((request) => request.id === "steer-1")?.targets[0]?.reason, "child completed before consuming steering");
+		assert.equal(recent.find((request) => request.id === "steer-2")?.targets[0]?.reason, "child completed before consuming steering");
+		const journal = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; requestId?: string; reason?: string });
+		for (const requestId of ["steer-1", "steer-2"]) {
+			assert.ok(journal.some((event) => event.type === "subagent.steer.queued" && event.requestId === requestId));
+			assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === requestId && event.reason === "child completed before consuming steering"));
+			assert.ok(!journal.some((event) => event.type === "subagent.steer.delivered" && event.requestId === requestId));
+		}
+	});
+
+	it("reports consumed inbox steer and follow-up at run end, including equal-text duplicates", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("before steer")],
+			keepAliveAfterFinalMessageMs: 15_000,
+			queuedMessageOutput: "after steer",
+		});
+		const id = `async-steer-consumed-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Wait for guidance",
+			agentConfig: makeAgent("worker", { completionGuard: false }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-steer-consumed" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+		await waitForMockPiCall(mockPi, 0, 10_000);
+		const scriptedFinal = path.join(mockPi.dir, "scripted-final.jsonl");
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(scriptedFinal)) {
+			if (Date.now() > deadline) assert.fail("Timed out waiting for scripted final message");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		const asyncDir = path.join(ASYNC_DIR, id);
+		requestAsyncSteer(asyncDir, { message: "Continue after the final stop.", id: "consumed-steer", ts: Date.now() });
+		requestAsyncSteer(asyncDir, { message: "Then check the docs.", id: "consumed-follow", ts: Date.now() + 1, mode: "follow_up" });
+		requestAsyncSteer(asyncDir, { message: "Same follow-up twice.", id: "dup-a", ts: Date.now() + 2, mode: "follow_up" });
+		requestAsyncSteer(asyncDir, { message: "Same follow-up twice.", id: "dup-b", ts: Date.now() + 3, mode: "follow_up" });
+		const payload = await readAsyncPayload(id);
+		assert.equal(payload.success, true, payload.results[0]?.error);
+		assert.equal(payload.results[0]?.output, "after steer");
+		type SteeringTargets = { steering?: { recent: Array<{ id: string; targets: Array<{ state: string; reason?: string }> }>; delivered?: number; failed?: number; pending?: number } };
+		const terminal = await waitForAsyncState(id, (candidate) => candidate.state === "complete") as AsyncStatusPayload & SteeringTargets;
+		const recent = terminal.steering?.recent ?? [];
+		for (const requestId of ["consumed-steer", "consumed-follow", "dup-a", "dup-b"]) {
+			assert.equal(recent.find((request) => request.id === requestId)?.targets[0]?.state, "delivered", requestId);
+			assert.equal(recent.find((request) => request.id === requestId)?.targets[0]?.reason, undefined, requestId);
+		}
+		assert.equal(terminal.steering?.delivered, 4);
+		assert.equal(terminal.steering?.failed, 0);
+		assert.equal(terminal.steering?.pending, 0);
+		const journal = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; requestId?: string });
+		for (const requestId of ["consumed-steer", "consumed-follow", "dup-a", "dup-b"]) {
+			assert.equal(journal.filter((event) => event.type === "subagent.steer.queued" && event.requestId === requestId).length, 1, requestId);
+			assert.equal(journal.filter((event) => event.type === "subagent.steer.delivered" && event.requestId === requestId).length, 1, requestId);
+			assert.ok(!journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === requestId), requestId);
+		}
 	});
 
 	it("journals terminal child status events for running async child stops", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "cross-process stop delivery unreliable on Windows CI" : undefined }, async () => {

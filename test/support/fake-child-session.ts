@@ -263,6 +263,12 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 			const drainQueuedBoundary = async (response: FakeChildResponse, task: string): Promise<void> => {
 				while (queued.length > 0 && !record.aborted) {
 					const drained = queued.splice(0);
+					for (const item of drained) {
+						emit({
+							type: "message_end",
+							message: { role: "user", content: [{ type: "text", text: item.text }] },
+						});
+					}
 					const delay = response.queuedMessageTurnStartDelayMs ?? 0;
 					if (delay > 0) await sleep(delay, abortedPromise);
 					if (record.aborted) return;

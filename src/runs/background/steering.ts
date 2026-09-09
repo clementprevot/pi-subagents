@@ -22,6 +22,21 @@ export function steeringMessagePreview(message: string): string {
 	return previewDisplayText(redactSecretValues(message), STEERING_MESSAGE_PREVIEW_LIMIT);
 }
 
+/** FIFO match of one accepted steer to an emitted user message; equal text claims the oldest entry. */
+export function takeMatchingAcceptedSteer<T extends { text: string }>(accepted: T[], messageText: string): T | undefined {
+	const index = accepted.findIndex((entry) => entry.text === messageText);
+	if (index < 0) return undefined;
+	const [entry] = accepted.splice(index, 1);
+	return entry;
+}
+
+/** Settlement reason for an accepted steer that never got a matching user `message_end`. */
+export function unconsumedSteerReason(hasQueuedMessages: boolean): string {
+	return hasQueuedMessages
+		? "run ended before queued follow-up delivery"
+		: "child completed before consuming steering";
+}
+
 export function steeringReceipt(message: string, receipt: string): string {
 	const preview = steeringMessagePreview(message);
 	const longestFence = Math.max(2, ...[...preview.matchAll(/`{3,}/g)].map((match) => match[0]!.length));
