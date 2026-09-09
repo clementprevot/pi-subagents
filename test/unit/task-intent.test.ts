@@ -167,6 +167,34 @@ describe("classifyTaskMutationIntent", () => {
 		assert.equal(expectsImplementationMutation("worker", "Do not modify tests; implement the fix"), true);
 		assert.equal(expectsImplementationMutation("worker", "Review the diff and suggest fixes only. Do not edit files."), false);
 	});
+
+	it("does not read verbs inside filenames or path-like tokens as implementation", () => {
+		const brief = "Render an audio briefing with the existing renderer to artifacts/daily-briefing.mp3.";
+		const renamed = "Render an audio briefing with the existing renderer to artifacts/daily-update.mp3.";
+		assert.equal(classifyTaskMutationIntent("worker", brief).kind, "unknown");
+		assert.equal(classifyTaskMutationIntent("worker", renamed).kind, "unknown");
+		assert.equal(classifyTaskMutationIntent("worker", brief).kind, classifyTaskMutationIntent("worker", renamed).kind);
+		assert.equal(expectsImplementationMutation("worker", renamed), false);
+
+		for (const task of [
+			"Render an audio briefing to daily-update.mp3.",
+			"Inspect artifacts/create-user.patch and report findings.",
+			"Read src/add-user.ts and describe the flow.",
+			"Summarize the contents of remove-old-cache.js.",
+			"Review the notes in replace-token.md.",
+		]) {
+			assert.notEqual(classifyTaskMutationIntent("worker", task).kind, "implementation", task);
+		}
+
+		assert.equal(
+			classifyTaskMutationIntent("worker", "Render an audio briefing to artifacts/daily-update.mp3. Then update the source file.").kind,
+			"implementation",
+		);
+		assert.equal(classifyTaskMutationIntent("worker", "Update the source file").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Update src/auth.ts").kind, "implementation");
+		assert.equal(classifyTaskMutationIntent("worker", "Do not modify tests; render to artifacts/daily-update.mp3").kind, "read-only");
+		assert.equal(classifyTaskMutationIntent("worker", "Do not modify tests; render to artifacts/daily-update.mp3. Then implement the fix.").kind, "implementation");
+	});
 });
 
 describe("taskMayMutate", () => {

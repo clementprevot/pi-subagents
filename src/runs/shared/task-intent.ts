@@ -7,6 +7,7 @@
  * - `classifyTaskMutationIntent` / `expectsImplementationMutation`: does the
  *   task REQUIRE file changes? Consumed by the completion mutation guard,
  *   which blocks completion, so its vocabulary is deliberately narrow.
+ *   Verbs inside filenames and path-like tokens do not count.
  * - `taskMayMutate`: COULD the task plausibly change files? Consumed by
  *   acceptance level inference, which only raises evidence gates, so its
  *   vocabulary is deliberately broad (any bare write verb).
@@ -95,6 +96,16 @@ function stripSeverityCompounds(task: string): string {
 	return task.replace(SEVERITY_COMPOUND_PATTERN, " ");
 }
 export { stripSeverityCompounds };
+
+// Hyphens and slashes are word boundaries, so a token like daily-update.mp3
+// or src/add.ts would otherwise look like the verbs update/add. Strip those
+// tokens before implementation matching only; acceptance still uses the raw
+// write-verb vocabulary.
+const PATH_LIKE_TOKEN_PATTERN = /[^\s]+[/\\][^\s]+|[^\s/\\]+\.[A-Za-z][A-Za-z0-9]{0,9}\b/g;
+
+function stripPathLikeTokens(task: string): string {
+	return task.replace(PATH_LIKE_TOKEN_PATTERN, " ");
+}
 
 const FIX_OR_PATCH_IMPLEMENTATION_PATTERN = /\b(?:fix|patch)\s+(?:(?:it|this|that|them|each|any|all|these|those)\b|(?:(?:a|an|the|any|all)\s+)?(?:(?:failing|failed|broken|flaky|red|cold|start|current|existing|reported|approved|known|regression|unit|integration|e2e|source|typescript|type-?script|ts|type-?check|compiler)\s+)*(?:bug|defect|issues?|problems?|failures?|regressions?|tests?|errors?|items?|typos?|code|source|implementation|component|function|module|class|method|logic|file|files|readme|docs?|changelog|package\.json|config|manifest|extension|prompt|command|lint(?:ing)?|build|ci|type-?check|type\s+checking)\b)/i;
 
@@ -190,7 +201,7 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
 	if (prohibitions.present) {
 		if (prohibitions.blanket) return { kind: "read-only" };
-		const remaining = prohibitions.strippedText;
+		const remaining = stripPathLikeTokens(prohibitions.strippedText);
 		if (isReviewerStyleAgent(agent)) {
 			return hasImplementationIntent(agent, remaining) ? { kind: "implementation" } : { kind: "read-only" };
 		}
@@ -201,7 +212,7 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	}
 
 	if (RESEARCH_AGENT_PATTERNS.some((pattern) => pattern.test(agent))) return { kind: "read-only" };
-	if (hasImplementationIntent(agent, taskText)) return { kind: "implementation" };
+	if (hasImplementationIntent(agent, stripPathLikeTokens(taskText))) return { kind: "implementation" };
 	if (isReviewerStyleAgent(agent)) return { kind: "read-only" };
 	return taskHasReadOnlyDeliverable(taskTextWithoutScopedConstraints) ? { kind: "read-only" } : { kind: "unknown" };
 }
