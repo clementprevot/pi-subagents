@@ -17,6 +17,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Do not report owned process-tree cleanup as `observed` when a detached descendant remains active after the owned process group exits. Thanks to [@rtbe](https://github.com/rtbe) for #2053.
 - Ignore verbs inside filenames and path-like tokens when classifying implementation intent, so artifact names such as `daily-update.mp3` do not create an implementation obligation. Thanks to [@SiebertLanhove](https://github.com/SiebertLanhove) for #2039.
 - Accept the boolean `fast` field on async recovery descriptors so a setting the writer persists can round-trip through follow-up. Thanks to [@isty2e](https://github.com/isty2e) for #2045.
 - Override `PI_PACKAGE_DIR` in detached runners with the detected npm Pi package root so npm runtime assets resolve from that package instead of an inherited host path. Thanks to [@alvarosevilla95](https://github.com/alvarosevilla95) for #2050.

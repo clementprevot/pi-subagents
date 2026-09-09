@@ -11,6 +11,15 @@ function processIsActive(pid: number): boolean {
 	return result.status === 0 && Boolean(result.stdout.trim()) && !result.stdout.trim().startsWith("Z");
 }
 
+function killProcessGroup(pid: number | undefined): void {
+	if (!pid) return;
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}
+
 test("owned process tree fails closed when process-group ownership is unsupported", { skip: process.platform !== "win32" }, async () => {
 	const proof = await createOwnedProcessTreeController(999_999).terminate();
 	assert.deepEqual(proof, { state: "unknown", reason: "unsupported-platform" });
@@ -65,5 +74,39 @@ test("owned process tree kills descendants and verifies a TERM-resistant POSIX g
 		delete process.env.PI_TEST_PS_MARKER;
 		delete process.env.PI_TEST_REAL_PS;
 		fs.rmSync(fixtureDir, { recursive: true, force: true });
+	}
+});
+
+test("owned process tree does not claim observed while a detached descendant remains", { skip: process.platform === "win32" }, async () => {
+	const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+	const writer = spawn(process.execPath, ["-e", `
+		const { spawn } = require("node:child_process");
+		const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+		process.stdout.write(String(child.pid) + "\\n");
+		setInterval(() => {}, 1000);
+	`], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+	assert.ok(writer.pid);
+	assert.ok(unrelated.pid);
+	const grandchildPid = await new Promise<number>((resolve, reject) => {
+		writer.once("error", reject);
+		writer.stdout!.once("data", (chunk) => resolve(Number(String(chunk).trim())));
+	});
+	try {
+		for (let attempt = 0; attempt < 50 && !processIsActive(grandchildPid); attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.equal(processIsActive(grandchildPid), true);
+		const proof = await createOwnedProcessTreeController(writer.pid, { termGraceMs: 50, killVerifyMs: 1000 }).terminate();
+		assert.equal(proof.state, "unknown", JSON.stringify(proof));
+		if (proof.state !== "unknown") throw new Error("expected unverified process-tree proof");
+		assert.equal(proof.reason, "verification-failed");
+		assert.match(proof.diagnostic ?? "", /detached descendant/);
+		assert.equal(processIsActive(writer.pid), false);
+		assert.equal(processIsActive(grandchildPid), true);
+		assert.equal(processIsActive(unrelated.pid), true);
+	} finally {
+		killProcessGroup(grandchildPid);
+		killProcessGroup(unrelated.pid);
+		killProcessGroup(writer.pid);
 	}
 });
