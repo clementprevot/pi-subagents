@@ -26,7 +26,7 @@ const ORCA_CLOSE_WATCHDOG_SCRIPT = [
 	"function run(args){return new Promise(resolve=>{try{const child=spawn(command,args,{stdio:['ignore','pipe','ignore'],windowsHide:true});let stdout='';if(child.stdout)child.stdout.on('data',chunk=>{stdout+=String(chunk);if(stdout.length>65536)stdout=stdout.slice(-65536)});child.once('error',()=>resolve({ok:false,stdout:''}));child.once('close',code=>resolve({ok:code===0,stdout}))}catch{resolve({ok:false,stdout:''})}})}",
 	"function parseJson(raw){try{return JSON.parse(String(raw||'').trim())}catch{return undefined}}",
 	"function pickTerminal(parsed){if(!parsed||typeof parsed!=='object')return undefined;return parsed.terminal||(parsed.result&&(parsed.result.terminal||parsed.result))||parsed}",
-	"setTimeout(()=>{void (async()=>{try{const shown=await run(['terminal','show','--terminal',handle,'--json']);const parsed=parseJson(shown.stdout);const t=pickTerminal(parsed);if(!t||typeof t!=='object')return;if(expectTitle&&(typeof t.title!=='string'||t.title!==expectTitle))return;if(expectTabId&&expectTabId!=='-'&&(typeof t.tabId!=='string'||t.tabId!==expectTabId))return;await run(['terminal','close','--terminal',handle,'--tab','--json'])}catch{}finally{process.exit(0)}})()},Number.isFinite(delayMs)&&delayMs>0?delayMs:0);",
+	"setTimeout(()=>{void (async()=>{try{if(!expectTitle||!expectTabId)return;const shown=await run(['terminal','show','--terminal',handle,'--json']);const parsed=parseJson(shown.stdout);const t=pickTerminal(parsed);if(!t||typeof t!=='object')return;if(typeof t.title!=='string'||t.title!==expectTitle)return;if(typeof t.tabId!=='string'||t.tabId!==expectTabId)return;await run(['terminal','close','--terminal',handle,'--tab','--json'])}catch{}finally{process.exit(0)}})()},Number.isFinite(delayMs)&&delayMs>0?delayMs:0);",
 ].join("");
 
 const ORCA_CREATE_WATCHDOG_SCRIPT = [
@@ -40,7 +40,7 @@ const ORCA_CREATE_WATCHDOG_SCRIPT = [
 	"function keepQueued(){try{const now=new Date();fs.utimesSync(done,now,now)}catch{}}",
 	"function predecessorReady(){if(previous==='-')return true;if(exists(previous.replace(/\\.pending$/,'.ready')))return true;try{return Date.now()-fs.statSync(previous).mtimeMs>=waitTimeout}catch{return true}}",
 	"function claimAutoClose(){if(manifest==='-')return false;try{fs.writeFileSync(manifest.replace(/\\.json$/,'.autoclose'),'',{flag:'wx',mode:0o600});return true}catch{return false}}",
-	"function catchupAutoClose(payload){if(!payload||payload.state!=='open')return;const handle=typeof payload.orcaHandle==='string'?payload.orcaHandle:'';if(!handle)return;const delay=payload.autoCloseDelaySec;if(typeof delay!=='number'||!(delay>0))return;let status='';try{status=String(fs.readFileSync(String(payload.logPath||'').replace(/\\.log$/,'.done'),'utf8')).trim()}catch{return}if(status!=='completed')return;if(!claimAutoClose())return;try{const w=spawn(process.execPath,['-e',closeScript,String(delay*1000),command,handle,typeof payload.orcaTitle==='string'?payload.orcaTitle:'',typeof payload.orcaTabId==='string'?payload.orcaTabId:'-'],{detached:true,stdio:'ignore',windowsHide:true});w.unref()}catch{}}",
+	"function catchupAutoClose(payload){if(!payload||payload.state!=='open')return;const handle=typeof payload.orcaHandle==='string'?payload.orcaHandle:'';const title=typeof payload.orcaTitle==='string'?payload.orcaTitle:'';const tabId=typeof payload.orcaTabId==='string'?payload.orcaTabId:'';if(!handle||!title||!tabId)return;const delay=payload.autoCloseDelaySec;if(typeof delay!=='number'||!(delay>0))return;let status='';try{status=String(fs.readFileSync(String(payload.logPath||'').replace(/\\.log$/,'.done'),'utf8')).trim()}catch{return}if(status!=='completed')return;if(!claimAutoClose())return;try{const w=spawn(process.execPath,['-e',closeScript,String(delay*1000),command,handle,title,tabId],{detached:true,stdio:'ignore',windowsHide:true});w.unref()}catch{}}",
 	"function updateManifest(state,stdout=''){if(manifest==='-')return;try{const payload=JSON.parse(fs.readFileSync(manifest,'utf8'));payload.state=state;payload.updatedAt=new Date().toISOString();const raw=stdout.trim();if(raw){try{const parsed=JSON.parse(raw);payload.orca=parsed;const t=parsed&&typeof parsed==='object'?(parsed.terminal||(parsed.result&&(parsed.result.terminal||parsed.result))||parsed):undefined;if(t&&typeof t==='object'){if(typeof t.handle==='string')payload.orcaHandle=t.handle;if(typeof t.tabId==='string')payload.orcaTabId=t.tabId;if(typeof t.title==='string')payload.orcaTitle=t.title}}catch{payload.orcaRaw=raw.slice(0,4096)}}fs.writeFileSync(manifest,JSON.stringify(payload,null,2)+'\\n');catchupAutoClose(payload)}catch{}}",
 	"function start(){",
 	" try{",
@@ -323,7 +323,7 @@ function scheduleTabClose(input: {
 	orcaCommand: string;
 	handle: string;
 	title: string;
-	tabId?: string;
+	tabId: string;
 	delayMs: number;
 }): void {
 	try {
@@ -333,7 +333,7 @@ function scheduleTabClose(input: {
 			input.orcaCommand,
 			input.handle,
 			input.title,
-			input.tabId ?? "-",
+			input.tabId,
 		], {
 			detached: true,
 			stdio: "ignore",
@@ -600,9 +600,8 @@ export function createOrcaProgressTab(input: {
 							const tabId = (typeof manifest?.orcaTabId === "string" && manifest.orcaTabId)
 								|| extracted.tabId;
 							const expectedTitle = (typeof manifest?.orcaTitle === "string" && manifest.orcaTitle)
-								|| extracted.title
-								|| title;
-							if (handle && claimAutoClose(manifestPath)) {
+								|| extracted.title;
+							if (handle && expectedTitle && tabId && claimAutoClose(manifestPath)) {
 								scheduleTabClose({
 									nodeExecutable,
 									orcaCommand: command,

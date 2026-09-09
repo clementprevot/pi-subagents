@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Added
-- Add opt-in `orcaProgressTabs.autoCloseDelaySec` to close Orca observer tabs after a successful run. Thanks to [@G0-0000](https://github.com/G0-0000) (#2063).
+- Add opt-in `orcaProgressTabs.autoCloseDelaySec` to close Orca observer tabs after a successful run. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Add default-off, main-only watchdog questions and task-continuity reviews from bounded delivered orchestration evidence (#2010).
 - Add the built-in `evidence-auditor` for independently reviewing important research claims and source support. Thanks to [@Muskos](https://github.com/Muskos) for #2023.
 - Notify the parent as individual async workflow children finish, without waiting for all siblings (#2027). Each child completion delivers a compact notification with the workflow run ID, child key, exact child run ID, outcome, and output reference while the workflow remains running.
@@ -15,7 +15,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
-- Parse the full stdout of `orca terminal create --json` so the observer manifest stores `orcaHandle` / `orcaTabId` / `orcaTitle` instead of `orcaRaw: "}"`. Thanks to [@G0-0000](https://github.com/G0-0000) (#2063).
+- Parse the full stdout of `orca terminal create --json` so the observer manifest stores `orcaHandle` / `orcaTabId` / `orcaTitle` instead of `orcaRaw: "}"`. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Keep workflow child tool exposure aligned with advertised agent tools when auto-discovered extensions wrap Pi builtins, and relocate auto-selected extension-repo worktrees outside Pi's extension auto-discovery directory (#2059).
 - Run the child prompt filter before ambient extensions inspect the system prompt. This keeps provider bridges aligned with the final child-visible context while preserving intentional global-context and parent-only skill exclusions. Thanks to [@leftytennis](https://github.com/leftytennis) for #2043.
 - Send OpenCode session-routing headers on internal helper model calls so task arbitration, watchdog, and prompt audit requests keep the same provider session as ordinary Pi traffic. Thanks to [@IdrisGit](https://github.com/IdrisGit) for #2041.

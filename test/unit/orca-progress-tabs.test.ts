@@ -568,7 +568,8 @@ function writeLifecycleOrca(dir: string): string {
 		"const action=args[1];",
 		"if(action==='create'){",
 		"  const title=args[args.indexOf('--title')+1];",
-		"  process.stdout.write(JSON.stringify({terminal:{handle:'term-1',tabId:'tab-1',title}},null,2)+'\\n');",
+		"  const payload=process.env.ORCA_TEST_CREATE?JSON.parse(process.env.ORCA_TEST_CREATE):{terminal:{handle:'term-1',tabId:'tab-1',title}};",
+		"  process.stdout.write(JSON.stringify(payload,null,2)+'\\n');",
 		"} else if(action==='show'){",
 		"  process.stdout.write(fs.readFileSync(path.join(__dirname,'show-payload.json'),'utf8'));",
 		"} else if(action==='close'){",
@@ -591,6 +592,7 @@ async function runAutoCloseCase(input: {
 	status: "completed" | "failed" | "stopped";
 	show: unknown;
 	delaySec?: number;
+	create?: unknown;
 }): Promise<"CLOSED" | "NOT_CLOSED"> {
 	const closeFile = path.join(input.dir, "close.json");
 	fs.writeFileSync(path.join(input.dir, "show-payload.json"), JSON.stringify(input.show));
@@ -603,6 +605,7 @@ async function runAutoCloseCase(input: {
 		index: 0,
 		config: { enabled: true, autoCloseDelaySec: input.delaySec ?? 0.05 },
 		command: fakeOrca,
+		env: input.create === undefined ? process.env : { ...process.env, ORCA_TEST_CREATE: JSON.stringify(input.create) },
 	});
 	assert.ok(tab);
 	await tab.creationSettled;
@@ -621,6 +624,10 @@ test("auto-close watchdog closes only on exact title/tabId match after completed
 	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1" } } }), "NOT_CLOSED");
 	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1", title: 1 } } }), "NOT_CLOSED");
 	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "tab-1", title: "other" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: { terminal: { handle: "term-1", tabId: "other", title } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: matching, create: { terminal: { handle: "term-1", title } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: matching, create: { terminal: { handle: "term-1", tabId: "tab-1" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseCase({ dir: tempDir(), status: "completed", show: matching, create: { terminal: { handle: "term-1", tabId: "tab-1", title: "" } } }), "NOT_CLOSED");
 });
 
 function writeSlowCreateOrca(dir: string, delayMs: number): string {
@@ -632,7 +639,8 @@ function writeSlowCreateOrca(dir: string, delayMs: number): string {
 		"if(action==='create'){",
 		`  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${delayMs});`,
 		"  const title=args[args.indexOf('--title')+1];",
-		"  process.stdout.write(JSON.stringify({terminal:{handle:'term-1',tabId:'tab-1',title}},null,2)+'\\n');",
+		"  const payload=process.env.ORCA_TEST_CREATE?JSON.parse(process.env.ORCA_TEST_CREATE):{terminal:{handle:'term-1',tabId:'tab-1',title}};",
+		"  process.stdout.write(JSON.stringify(payload,null,2)+'\\n');",
 		"} else if(action==='show'){",
 		"  process.stdout.write(fs.readFileSync(path.join(__dirname,'show-payload.json'),'utf8'));",
 		"} else if(action==='close'){",
@@ -645,6 +653,7 @@ async function runAutoCloseRace(input: {
 	dir: string;
 	status: "completed" | "failed" | "stopped";
 	createDelayMs?: number;
+	create?: unknown;
 }): Promise<"CLOSED" | "NOT_CLOSED"> {
 	const title = "subagents · worker · 1";
 	const closeFile = path.join(input.dir, "close.json");
@@ -658,6 +667,7 @@ async function runAutoCloseRace(input: {
 		index: 0,
 		config: { enabled: true, autoCloseDelaySec: 0.05 },
 		command: fakeOrca,
+		env: input.create === undefined ? process.env : { ...process.env, ORCA_TEST_CREATE: JSON.stringify(input.create) },
 	});
 	assert.ok(tab);
 	await tab.finish(input.status);
@@ -674,6 +684,9 @@ test("auto-close catch-up closes when create lands the handle after a completed 
 	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "completed" }), "CLOSED");
 	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "failed" }), "NOT_CLOSED");
 	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "stopped" }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "completed", create: { terminal: { handle: "term-1", title: "subagents · worker · 1" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "completed", create: { terminal: { handle: "term-1", tabId: "tab-1" } } }), "NOT_CLOSED");
+	assert.equal(await runAutoCloseRace({ dir: tempDir(), status: "completed", create: { terminal: { handle: "term-1", tabId: "tab-1", title: "" } } }), "NOT_CLOSED");
 });
 
 test("mirror output truncates at a finite byte bound", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
