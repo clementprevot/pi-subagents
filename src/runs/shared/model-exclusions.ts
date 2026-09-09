@@ -512,21 +512,70 @@ function readPersistedExclusionsSnapshot(): { raw: string | undefined; entries: 
 	}
 }
 
-function writeExclusionsIfUnchanged(expectedRaw: string | undefined, next: ModelExclusion[]): boolean {
-	const file = getExclusionsFilePath();
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	let current: string | undefined;
+function waitBriefly(): void {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+}
+
+function acquireExclusionStoreLock(): string | undefined {
+	const lockPath = `${getExclusionsFilePath()}.store.lock`;
 	try {
-		current = fs.readFileSync(file, "utf-8");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
-		current = undefined;
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+	} catch {
+		return undefined;
 	}
-	if (current !== expectedRaw) return false;
-	const tmpPath = `${file}.${process.pid}.${persistSeq++}.tmp`;
-	fs.writeFileSync(tmpPath, JSON.stringify({ version: 1, exclusions: deduplicate(next) }, null, 2), "utf-8");
-	fs.renameSync(tmpPath, file);
-	return true;
+	for (let attempt = 0; attempt < 16; attempt++) {
+		try {
+			const fd = fs.openSync(lockPath, "wx", 0o600);
+			try {
+				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid }), "utf-8");
+				fs.fsyncSync(fd);
+			} catch {
+				try { fs.closeSync(fd); } catch { /* lock file removed below */ }
+				try { fs.rmSync(lockPath, { force: true }); } catch { /* next attempt recreates */ }
+				return undefined;
+			}
+			try { fs.closeSync(fd); } catch { /* fd already closed */ }
+			return lockPath;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+			let live = false;
+			try {
+				const parsed = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { pid?: unknown };
+				live = typeof parsed.pid === "number" && processIsAlive(parsed.pid);
+			} catch {
+				live = false;
+			}
+			if (!live) {
+				try { fs.rmSync(lockPath, { force: true }); } catch { /* another reclaimer won */ }
+				continue;
+			}
+			waitBriefly();
+		}
+	}
+	return undefined;
+}
+
+function writeExclusionsIfUnchanged(expectedRaw: string | undefined, next: ModelExclusion[]): boolean {
+	const lockPath = acquireExclusionStoreLock();
+	if (!lockPath) return false;
+	try {
+		const file = getExclusionsFilePath();
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		let current: string | undefined;
+		try {
+			current = fs.readFileSync(file, "utf-8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+			current = undefined;
+		}
+		if (current !== expectedRaw) return false;
+		const tmpPath = `${file}.${process.pid}.${persistSeq++}.tmp`;
+		fs.writeFileSync(tmpPath, JSON.stringify({ version: 1, exclusions: deduplicate(next) }, null, 2), "utf-8");
+		fs.renameSync(tmpPath, file);
+		return true;
+	} finally {
+		try { fs.rmSync(lockPath, { force: true }); } catch { /* leftover lock is reclaimed when its PID dies */ }
+	}
 }
 
 function applyExclusionStoreUpdate(mutator: (current: ModelExclusion[]) => ModelExclusion[]): boolean {
