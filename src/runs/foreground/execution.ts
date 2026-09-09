@@ -86,7 +86,7 @@ import {
 	recordRetryableModelFailure,
 	TRANSIENT_RECOVERY_PROBE_IN_FLIGHT,
 } from "../shared/model-fallback.ts";
-import { claimTransientModelRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
+import { claimLaunchTransientRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
 import {
 	createMutatingFailureState,
 	didMutatingToolFail,
@@ -1965,7 +1965,9 @@ async function runSyncCompletionInner(
 			const verifyModel = Boolean(candidate) && !(options.modelOverrideFromParent && modelIndex === 0);
 			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 			if (recoveryState === "readonly-continuation") attemptOptions.deadlineAt = continuationDeadline;
-			const probeClaim = claimTransientModelRecoveryProbe(candidate);
+			const probeClaim = claimLaunchTransientRecoveryProbe(modelsToTry, candidate, {
+				recovering: recoveringAbort || recoveryState === "readonly-continuation",
+			});
 			if (probeClaim.status === "in-flight") {
 				lastResult = withRunContext({
 					index: options.index ?? 0, agent: agent.name, task, exitCode: 1, messages: [], usage: emptyUsage(),

@@ -27,7 +27,7 @@ import {
 import type { ChildWatchdogProgress, SubagentState } from "../../src/shared/types.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-config.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
+import { clearExclusions, flushPersist } from "../../src/runs/shared/model-exclusions.ts";
 
 interface ModelAttempt {
 	success?: boolean;
@@ -304,10 +304,12 @@ export function installSingleExecutionHooks() {
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		mockPi.reset();
 		clearExclusions();
+		flushPersist();
 	});
 
 	afterEach(() => {
 		clearExclusions();
+		flushPersist();
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		removeTempDir(agentDir);

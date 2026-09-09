@@ -18,7 +18,7 @@ import { asyncResultTimeoutEvidence } from "./async-result-timeout-evidence.ts";
 import { createEventBus, createMockPi, createTempDir, makeAgent, removeTempDir, resolveMockPiCallArgs, tryImport } from "./helpers.ts";
 import type { MockPi } from "./helpers.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
+import { clearExclusions, flushPersist } from "../../src/runs/shared/model-exclusions.ts";
 
 interface LaunchResolvedExtensions {
 	version?: number;
@@ -620,10 +620,12 @@ export function installAsyncExecutionHooks(): void {
 		tempDir = createTempDir();
 		mockPi.reset();
 		clearExclusions();
+		flushPersist();
 	});
 
 	afterEach(() => {
 		clearExclusions();
+		flushPersist();
 		removeTempDir(tempDir);
 	});
 }

@@ -233,10 +233,14 @@ export function recordModelFailure(options: RecordModelFailureOptions): void {
 		recordedAt: now,
 		expiresAt: now + ttl,
 	};
-	exclusions.unshift(exclusion);
-	exclusions = deduplicate(exclusions);
-	if (exclusions.length > 200) exclusions.length = 200;
-	flushPersist();
+	if (!applyExclusionStoreUpdate((current) => {
+		if (loadedTTLCeilingMs !== undefined) shortenExclusionsToTTL(current, loadedTTLCeilingMs, now);
+		const next = deduplicate([exclusion, ...current]);
+		if (next.length > 200) next.length = 200;
+		return next;
+	})) {
+		console.error(`[model-exclusions] Failed to persist a recorded exclusion for ${options.modelId ?? options.provider}.`);
+	}
 }
 
 /**
@@ -367,13 +371,15 @@ function processIsAlive(pid: number): boolean {
 	}
 }
 
-function readStoredProbeClaim(claimPath: string): StoredProbeClaim | "unreadable" | undefined {
-	let raw: string;
-	try {
-		raw = fs.readFileSync(claimPath, "utf-8");
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
-	}
+type ProbeClaimSnapshot = {
+	raw: string;
+	ino: number;
+	size: number;
+	mtimeMs: number;
+	claim: StoredProbeClaim | undefined;
+};
+
+function parseStoredProbeClaim(raw: string): StoredProbeClaim | undefined {
 	try {
 		const value = JSON.parse(raw) as Partial<StoredProbeClaim>;
 		if (typeof value.owner !== "string" || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0) return undefined;
@@ -381,6 +387,31 @@ function readStoredProbeClaim(claimPath: string): StoredProbeClaim | "unreadable
 		return { owner: value.owner, pid: value.pid, expiresAt: value.expiresAt };
 	} catch {
 		return undefined;
+	}
+}
+
+function readProbeClaimSnapshot(claimPath: string): ProbeClaimSnapshot | "unreadable" | undefined {
+	let raw: string;
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(claimPath);
+		raw = fs.readFileSync(claimPath, "utf-8");
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
+	}
+	return { raw, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, claim: parseStoredProbeClaim(raw) };
+}
+
+function unlinkObservedProbeClaim(claimPath: string, observed: ProbeClaimSnapshot): boolean {
+	try {
+		const current = fs.statSync(claimPath);
+		if (observed.ino !== 0 && current.ino !== observed.ino) return false;
+		if (current.size !== observed.size) return false;
+		if (fs.readFileSync(claimPath, "utf-8") !== observed.raw) return false;
+		fs.rmSync(claimPath);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -430,12 +461,28 @@ export function claimTransientModelRecoveryProbe(candidate: string | undefined):
 		return { status: "in-flight" };
 	}
 	if (tryCreateProbeClaim(claimPath, owner)) return { status: "claimed", probe: { ...planned, owner } };
-	const existing = readStoredProbeClaim(claimPath);
+	const existing = readProbeClaimSnapshot(claimPath);
 	if (existing === "unreadable") return { status: "in-flight" };
-	if (existing && processIsAlive(existing.pid)) return { status: "in-flight" };
-	try { fs.rmSync(claimPath, { force: true }); } catch { return { status: "in-flight" }; }
+	if (existing?.claim && processIsAlive(existing.claim.pid)) return { status: "in-flight" };
+	if (existing && !unlinkObservedProbeClaim(claimPath, existing)) {
+		const replacement = readProbeClaimSnapshot(claimPath);
+		if (replacement === "unreadable" || (replacement?.claim && processIsAlive(replacement.claim.pid))) return { status: "in-flight" };
+		if (replacement) return { status: "in-flight" };
+	}
 	if (tryCreateProbeClaim(claimPath, owner)) return { status: "claimed", probe: { ...planned, owner } };
 	return { status: "in-flight" };
+}
+
+/** Claim only the launch-planned recovery candidate, never a later fallback or abort-resume. */
+export function claimLaunchTransientRecoveryProbe(
+	candidates: readonly (string | undefined)[],
+	candidate: string | undefined,
+	options?: { recovering?: boolean },
+): ModelRecoveryProbeClaim {
+	if (options?.recovering || !candidate) return { status: "not-eligible" };
+	const planned = planTransientModelRecoveryProbe(candidates.filter((entry): entry is string => Boolean(entry)));
+	if (!planned || planned.candidate !== candidate) return { status: "not-eligible" };
+	return claimTransientModelRecoveryProbe(candidate);
 }
 
 function sameRecordedExclusion(left: Readonly<ModelExclusion>, right: Readonly<ModelExclusion>): boolean {
@@ -446,24 +493,75 @@ function sameRecordedExclusion(left: Readonly<ModelExclusion>, right: Readonly<M
 		&& left.reason === right.reason;
 }
 
+function readPersistedExclusionsSnapshot(): { raw: string | undefined; entries: ModelExclusion[] } {
+	try {
+		const raw = fs.readFileSync(getExclusionsFilePath(), "utf-8");
+		const data = JSON.parse(raw) as { version?: unknown; exclusions?: unknown };
+		if (data.version !== 1 || !Array.isArray(data.exclusions)) return { raw, entries: [] };
+		const now = Date.now();
+		return {
+			raw,
+			entries: deduplicate(data.exclusions.flatMap((entry, index) => {
+				const parsed = readPersistedExclusion(entry, index);
+				return parsed.ok && parsed.exclusion.expiresAt > now ? [parsed.exclusion] : [];
+			})),
+		};
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { raw: undefined, entries: [] };
+		return { raw: undefined, entries: [] };
+	}
+}
+
+function writeExclusionsIfUnchanged(expectedRaw: string | undefined, next: ModelExclusion[]): boolean {
+	const file = getExclusionsFilePath();
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	let current: string | undefined;
+	try {
+		current = fs.readFileSync(file, "utf-8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+		current = undefined;
+	}
+	if (current !== expectedRaw) return false;
+	const tmpPath = `${file}.${process.pid}.${persistSeq++}.tmp`;
+	fs.writeFileSync(tmpPath, JSON.stringify({ version: 1, exclusions: deduplicate(next) }, null, 2), "utf-8");
+	fs.renameSync(tmpPath, file);
+	return true;
+}
+
+function applyExclusionStoreUpdate(mutator: (current: ModelExclusion[]) => ModelExclusion[]): boolean {
+	for (let attempt = 0; attempt < 8; attempt++) {
+		try {
+			const snapshot = readPersistedExclusionsSnapshot();
+			const next = mutator(snapshot.entries);
+			if (writeExclusionsIfUnchanged(snapshot.raw, next)) {
+				exclusions = next;
+				loaded = true;
+				return true;
+			}
+		} catch {
+			// Retry a raced or transient filesystem write; callers decide whether to surface failure.
+		}
+	}
+	return false;
+}
+
 function clearRecoveredTransientExclusion(probe: ClaimedModelRecoveryProbe): void {
-	ensureLoaded();
 	const { provider, modelId } = parseModelKey(probe.candidate);
-	const next = exclusions.filter((entry) => !(
+	if (!applyExclusionStoreUpdate((current) => current.filter((entry) => !(
 		sameRecordedExclusion(entry, probe.exclusion)
 		&& entryMatches(entry, modelId, provider, Date.now())
 		&& isReprobeEligibleTransientReason(entry.reason)
-	));
-	if (next.length === exclusions.length) return;
-	exclusions = next;
-	flushPersist();
+	)))) {
+		throw new Error("Unable to clear the recovered exclusion without clobbering a concurrent store update.");
+	}
 }
 
 function releaseProbeClaim(probe: ClaimedModelRecoveryProbe): void {
 	const claimPath = recoveryClaimPath(probe.candidate);
-	const existing = readStoredProbeClaim(claimPath);
-	if (!existing || existing === "unreadable" || existing.owner !== probe.owner) return;
-	try { fs.rmSync(claimPath, { force: true }); } catch { /* a leftover file is reclaimed when its PID dies */ }
+	const existing = readProbeClaimSnapshot(claimPath);
+	if (!existing || existing === "unreadable" || existing.claim?.owner !== probe.owner) return;
+	try { fs.rmSync(claimPath); } catch { /* a leftover file is reclaimed when its PID dies */ }
 }
 
 /** Release ownership. Cleanup errors are swallowed so they cannot discard a finished child. */

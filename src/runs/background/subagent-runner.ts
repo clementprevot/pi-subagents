@@ -113,7 +113,7 @@ import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelSt
 import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-fanout-budget.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent } from "../shared/nested-events.ts";
 import { formatModelAttemptNote, formatSubagentModelVerificationError, formatTransientRecoveryProbeFailure, isContextOverflow, isRetryableModelFailureAttempt, recordRetryableModelFailure, TRANSIENT_RECOVERY_PROBE_IN_FLIGHT } from "../shared/model-fallback.ts";
-import { claimTransientModelRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
+import { claimLaunchTransientRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
@@ -1185,7 +1185,9 @@ export async function runSingleStepInner(
 		// Each attempt rewrites the step output log; synchronous appends keep a
 		// retried attempt from interleaving with the previous attempt's flush.
 		fs.writeFileSync(ctx.outputFile, "", "utf-8");
-		const probeClaim = claimTransientModelRecoveryProbe(candidate);
+		const probeClaim = claimLaunchTransientRecoveryProbe(candidates, candidate, {
+			recovering: recoveringAbort || recoveryState === "readonly-continuation",
+		});
 		if (probeClaim.status === "in-flight") {
 			return omitUndefinedProperties({ agent: step.agent, output: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, error: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, exitCode: 1, context: step.context });
 		}

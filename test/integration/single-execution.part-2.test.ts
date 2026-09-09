@@ -21,6 +21,7 @@ import {
 } from "../support/single-execution-fixture.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createServer, type Socket } from "node:net";
@@ -63,7 +64,7 @@ import { discardPreservedWorktrees } from "../../src/runs/shared/parallel-handof
 import { createWorktrees } from "../../src/runs/shared/worktree.ts";
 import { resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
-import { clearExclusions, findModelExclusion, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
+import { clearExclusions, findModelExclusion, recordModelFailure, reloadFromDisk } from "../../src/runs/shared/model-exclusions.ts";
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
 import { toSubagentDelegationExecutionParams } from "../../src/slash/delegation-adapters.ts";
 
@@ -2426,12 +2427,27 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("re-probes one transiently excluded model and clears only the successful exclusion", async () => {
-		clearExclusions();
-		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
-		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
-		mockPi.onCall({ output: "Recovered live provider" });
+	async function withIsolatedExclusions<T>(run: () => Promise<T>): Promise<T> {
+		const isolated = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-fg-recovery-")), "exclusions.json");
+		const previous = process.env.PI_MODEL_EXCLUSIONS_PATH;
+		process.env.PI_MODEL_EXCLUSIONS_PATH = isolated;
+		reloadFromDisk();
 		try {
+			return await run();
+		} finally {
+			clearExclusions();
+			if (previous === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
+			else process.env.PI_MODEL_EXCLUSIONS_PATH = previous;
+			reloadFromDisk();
+			fs.rmSync(path.dirname(isolated), { recursive: true, force: true });
+		}
+	}
+
+	it("re-probes one transiently excluded model and clears only the successful exclusion", async () => {
+		await withIsolatedExclusions(async () => {
+			recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+			recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+			mockPi.onCall({ output: "Recovered live provider" });
 			const result = await runSync(tempDir, [makeAgent("worker", {
 				model: "openai/gpt-5-mini", fallbackModels: ["anthropic/claude-sonnet-4"],
 			})], "worker", "Do work", {
@@ -2446,16 +2462,15 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(mockPi.callCount(), 1);
 			assert.equal(findModelExclusion("openai/gpt-5-mini"), undefined);
 			assert.equal(findModelExclusion("anthropic/claude-sonnet-4")?.reason, "fetch failed");
-		} finally { clearExclusions(); }
+		});
 	});
 
 	it("does not try a second excluded model when the real transient recovery probe fails", async () => {
-		clearExclusions();
-		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
-		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
-		mockPi.onCall({ stderr: "503 service unavailable", exitCode: 1 });
-		mockPi.onCall({ output: "must not run" });
-		try {
+		await withIsolatedExclusions(async () => {
+			recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+			recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+			mockPi.onCall({ stderr: "503 service unavailable", exitCode: 1 });
+			mockPi.onCall({ output: "must not run" });
 			const result = await runSync(tempDir, [makeAgent("worker", {
 				model: "openai/gpt-5-mini", fallbackModels: ["anthropic/claude-sonnet-4"],
 			})], "worker", "Do work", {
@@ -2470,15 +2485,14 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.match(result.error ?? "", /Transient recovery probe failed; provider remains live-unavailable/);
 			assert.equal(mockPi.callCount(), 1);
 			assert.equal(findModelExclusion("openai/gpt-5-mini")?.reason, "503 service unavailable");
-		} finally { clearExclusions(); }
+		});
 	});
 
 	it("fails closed before spawn when every candidate is excluded for a rate limit", async () => {
-		clearExclusions();
-		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "429 rate limit" });
-		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "quota exceeded" });
-		mockPi.onCall({ output: "should not spawn" });
-		try {
+		await withIsolatedExclusions(async () => {
+			recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "429 rate limit" });
+			recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "quota exceeded" });
+			mockPi.onCall({ output: "should not spawn" });
 			await assert.rejects(
 				runSync(tempDir, [makeAgent("worker", {
 					model: "openai/gpt-5-mini",
@@ -2494,35 +2508,37 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				/No usable subagent models remain after registry, scope, and cached-exclusion filtering/,
 			);
 			assert.equal(mockPi.callCount(), 0);
-		} finally { clearExclusions(); }
+		});
 	});
 
 	it("fails closed before spawn when cached exclusions leave zero launch candidates", async () => {
-		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "sk-secret-token-xyz" });
-		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "sk-secret-token-xyz" });
-		mockPi.onCall({ output: "should not spawn" });
-		const agents = [makeAgent("worker", {
-			model: "openai/gpt-5-mini",
-			fallbackModels: ["anthropic/claude-sonnet-4"],
-		})];
+		await withIsolatedExclusions(async () => {
+			recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "sk-secret-token-xyz" });
+			recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "sk-secret-token-xyz" });
+			mockPi.onCall({ output: "should not spawn" });
+			const agents = [makeAgent("worker", {
+				model: "openai/gpt-5-mini",
+				fallbackModels: ["anthropic/claude-sonnet-4"],
+			})];
 
-		await assert.rejects(
-			runSync(tempDir, agents, "worker", "Do work", {
-				runId: "cached-exclusion-zero-candidates",
-				acceptance: false,
-				availableModels: [
-					{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
-					{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
-				],
-			}),
-			(error: unknown) => {
-				assert.ok(error instanceof Error);
-				assert.match(error.message, /No usable subagent models remain after registry, scope, and cached-exclusion filtering/);
-				assert.equal(error.message.includes("sk-secret-token-xyz"), false);
-				return true;
-			},
-		);
-		assert.equal(mockPi.callCount(), 0);
+			await assert.rejects(
+				runSync(tempDir, agents, "worker", "Do work", {
+					runId: "cached-exclusion-zero-candidates",
+					acceptance: false,
+					availableModels: [
+						{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+						{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+					],
+				}),
+				(error: unknown) => {
+					assert.ok(error instanceof Error);
+					assert.match(error.message, /No usable subagent models remain after registry, scope, and cached-exclusion filtering/);
+					assert.equal(error.message.includes("sk-secret-token-xyz"), false);
+					return true;
+				},
+			);
+			assert.equal(mockPi.callCount(), 0);
+		});
 	});
 
 	it("fails closed before spawn when fallback-only configuration resolves no launch candidates", async () => {
