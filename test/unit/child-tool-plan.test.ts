@@ -178,6 +178,9 @@ describe("production launch path supplies hostAvailableBuiltins", () => {
 			assert.deepEqual(launch.toolPlan.declaredBuiltinTools, ["bash"]);
 			assert.deepEqual(launch.toolPlan.unavailableHostBuiltins, ["read", "grep"]);
 			assert.deepEqual(launch.toolPlan.effectiveToolAllowlist, ["bash"]);
+			assert.deepEqual(launch.warnings, [
+				"Agent 'test-agent': host runtime tool availability omitted [read, grep]. Requested tool names: [read, grep, bash]; effective tool allowlist: [bash]. This is a non-fatal tool-plan diagnostic, not verification of the child's runtime tool menu.",
+			]);
 		} finally {
 			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

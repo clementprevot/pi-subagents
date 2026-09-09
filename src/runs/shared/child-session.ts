@@ -213,8 +213,12 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 			const modelRuntime = await sharedRuntime(pi);
 			const agentDir = getAgentDir();
 			const settingsManager = pi.SettingsManager.create(launch.cwd, agentDir);
-			// Headless sessions skip Pi's CLI theme setup; extensions still need ctx.ui.theme.
-			if (typeof pi.initTheme === "function") pi.initTheme(settingsManager.getTheme());
+			// Foreground children share Pi's global theme with the parent, so reinitializing it
+			// would overwrite the parent's active light/dark appearance. Detached runners have
+			// no initialized theme and must initialize one for headless extension renderers.
+			const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
+			const themeInitialized = Boolean((globalThis as Record<symbol, unknown>)[themeKey]);
+			if (!themeInitialized && typeof pi.initTheme === "function") pi.initTheme(settingsManager.getTheme());
 			const loader = new pi.DefaultResourceLoader({
 				cwd: launch.cwd,
 				agentDir,
