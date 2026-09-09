@@ -1346,6 +1346,7 @@ describe("subagent extension child mode", () => {
 			const registrations = [];
 			function makePi(source) {
 				return {
+					on() {},
 					events: { on() { return () => {}; }, emit() {} },
 					registerTool(tool) {
 						if (registeredNames.has(tool.name)) {
@@ -1385,6 +1386,7 @@ describe("subagent extension child mode", () => {
 			import registerFanoutChildSubagentExtension from "./src/extension/fanout-child.ts";
 			let registeredTool;
 			const fakePi = {
+				on() {},
 				events: { on() { return () => {}; }, emit() {} },
 				registerTool(tool) { registeredTool = tool; },
 				getSessionName() { return undefined; },
