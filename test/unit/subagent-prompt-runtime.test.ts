@@ -30,6 +30,7 @@ function childConfig(overrides: Partial<ChildRuntimeConfig> = {}): ChildRuntimeC
 it("does not skip drain for in-process child sessions when hasUI is true", async () => {
 	const handlers = new Map<string, Function[]>();
 	const listeners = new Map<string, Array<() => void>>();
+	const held: boolean[] = [];
 	const sessionId = "reviewer-ui-session.jsonl";
 	const runtimeState = {
 		foregroundRuns: new Map([["fg", {
@@ -43,43 +44,17 @@ it("does not skip drain for in-process child sessions when hasUI is true", async
 		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
 		registerTool: () => {},
 		events: { on: (channel: string, handler: () => void) => { listeners.set(channel, [...(listeners.get(channel) ?? []), handler]); return () => {}; } },
-	} as never, childConfig({ runtimeState }));
+	} as never, childConfig({ runtimeState, holdFinalDrain: (value) => { held.push(value); } }));
 	await emit("session_start", {});
 	let settled = false;
 	const ended = emit("agent_end", { messages: [] }).then(() => { settled = true; });
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.equal(settled, false);
-	runtimeState.foregroundRuns.get("fg")!.children[0]!.status = "completed";
-	for (const handler of listeners.get(SUBAGENT_FOREGROUND_COMPLETE_EVENT) ?? []) handler();
-	await ended;
-	assert.equal(settled, true);
-});
-
-it("holds the runner final-drain window while descendant drain is in flight", async () => {
-	const handlers = new Map<string, Function[]>();
-	const listeners = new Map<string, Array<() => void>>();
-	const sessionId = "reviewer-hold-session.jsonl";
-	const held: boolean[] = [];
-	const runtimeState = {
-		foregroundRuns: new Map([["fg", {
-			runId: "fg", mode: "single", cwd: "/tmp", sessionId, updatedAt: 1,
-			children: [{ agent: "reviewer", index: 0, status: "detached", updatedAt: 1 }],
-		}]]),
-	} as SubagentState;
-	const ctx = { hasUI: false, sessionManager: { getSessionFile: () => sessionId } };
-	const emit = async (name: string, event: unknown) => { for (const fn of handlers.get(name) ?? []) await fn(event, ctx); };
-	registerSubagentPromptRuntime({
-		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
-		registerTool: () => {},
-		events: { on: (channel: string, handler: () => void) => { listeners.set(channel, [...(listeners.get(channel) ?? []), handler]); return () => {}; } },
-	} as never, childConfig({ runtimeState, holdFinalDrain: (value) => { held.push(value); } }));
-	await emit("session_start", {});
-	const ended = emit("agent_end", { messages: [] });
-	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.deepEqual(held, [true]);
 	runtimeState.foregroundRuns.get("fg")!.children[0]!.status = "completed";
 	for (const handler of listeners.get(SUBAGENT_FOREGROUND_COMPLETE_EVENT) ?? []) handler();
 	await ended;
+	assert.equal(settled, true);
 	assert.deepEqual(held, [true, false]);
 });
 

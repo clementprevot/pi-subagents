@@ -27,7 +27,7 @@ describe("child lifecycle final drain", () => {
 		assert.equal(projectChildLifecycle({ type: "message_update" }), "none");
 	});
 
-	it("cancels the final drain on a plain agent_end so descendant settlement can finish", () => {
+	it("cancels the final drain on a plain agent_end", () => {
 		const state: ChildLifecycleState = { compactionRetryActive: false };
 		assert.equal(projectChildLifecycle({ type: "message_end" }, true, state), "start-drain");
 		assert.equal(projectChildLifecycle({ type: "agent_end" }, false, state), "cancel-drain");
