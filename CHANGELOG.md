@@ -12,6 +12,7 @@
 - Notify the parent as individual async workflow children finish, without waiting for all siblings (#2027). Each child completion delivers a compact notification with the workflow run ID, child key, exact child run ID, outcome, and output reference while the workflow remains running.
 
 ### Changed
+- Report host-pruned child tools in existing launch warnings, including the agent, requested/effective tool names, and active ceiling sources when known, without changing launch outcomes. Diagnostic follow-up for #2058; thanks to [@nicobailon](https://github.com/nicobailon).
 - Consolidate model-facing subagent prose while retaining the flat typed execution/control API; keep extended recipes in the existing on-demand guides. Thanks to [@Whamp](https://github.com/Whamp) for the prompt-footprint measurements and proposal in #2048.
 - Color FleetView agent labels by stable agent identity so multi-agent runs are easier to scan. Thanks to [@savinofiore](https://github.com/savinofiore) for #2056.
 - Forked children keep their requested thinking level after signed Anthropic thinking blocks are stripped from the inherited transcript; fork context no longer forces thinking off for Anthropic-backed children. Requires a Pi host on 0.85.0 or newer, which recovers from signed-thinking mismatches on the transport. Thanks to [@hank-warren](https://github.com/hank-warren) for #2021.
@@ -20,6 +21,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Preserve the parent's active theme when foreground children start, while initializing themes in detached runners and refreshing slash-result rendering. Thanks to [@kubahasek](https://github.com/kubahasek) for #2089.
 - Advance live workflow and lane elapsed times from their starts, and nest loaded workflow children in the async widget instead of repeating lane rows and sibling cards. Partial fix for #2085; thanks to [@expoli](https://github.com/expoli).
 - Collapse duplicate async workflow details only when the same inline Fleet roster fully renders the group; retain detail for nested, attached, truncated, or uncertain coverage. Related to #2085; thanks to [@expoli](https://github.com/expoli).
 - Let fanout-authorized child coordinators answer their own children's supervisor requests with explicitly selected `subagent_supervisor`, preserving immediate-parent session ownership and tool restrictions. Keep explicitly requested native coordination tools through host-builtin filtering, and poll only live descendant channels. Thanks to [@shaharmor](https://github.com/shaharmor) for #2087.
