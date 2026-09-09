@@ -2356,6 +2356,7 @@ export interface ForegroundChildSessionControls {
 }
 
 export interface RunSyncOptions {
+	sshProject?: import("../runs/shared/ssh-project-bootstrap.ts").SshProjectBootstrap;
 	/** Exact discovery provenance for an unknown-agent error; omission uses defensive fallback discovery. */
 	unknownAgentDiagnosticContext?: import("../agents/agents.ts").UnknownAgentDiagnosticContext;
 	/** Session factory for the in-process child; defaults to the process-wide factory. */

@@ -193,7 +193,7 @@ export function getConfigPath(): string {
 	return path.join(getAgentDir(), "extensions", "subagent", "config.json");
 }
 
-function readConfigForUpdate(configPath = getConfigPath()): ExtensionConfig {
+export function readConfigForUpdate(configPath = getConfigPath()): ExtensionConfig {
 	if (!fs.existsSync(configPath)) return {};
 	const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as unknown;
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
