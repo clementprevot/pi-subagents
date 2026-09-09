@@ -183,6 +183,28 @@ describe("model exclusions — transient recovery probes", () => {
 		assert.equal(findModelExclusion("openai/gpt-4"), undefined);
 	});
 
+	it("treats a recently created empty recovery-probe claim as in-flight", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+		const candidate = "openai/gpt-4";
+		const claimPath = `${getExclusionsFilePath()}.recovery-probe.${Buffer.from(candidate).toString("base64url")}.json`;
+		fs.writeFileSync(claimPath, "", { flag: "wx" });
+		assert.equal(claimTransientModelRecoveryProbe(candidate).status, "in-flight");
+		assert.equal(fs.readFileSync(claimPath, "utf-8"), "");
+		fs.rmSync(claimPath, { force: true });
+	});
+
+	it("reclaims a stale empty recovery-probe claim", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+		const candidate = "openai/gpt-4";
+		const claimPath = `${getExclusionsFilePath()}.recovery-probe.${Buffer.from(candidate).toString("base64url")}.json`;
+		fs.writeFileSync(claimPath, "", { flag: "wx" });
+		const ancient = new Date(Date.now() - 60_000);
+		fs.utimesSync(claimPath, ancient, ancient);
+		const reclaimed = claimTransientModelRecoveryProbe(candidate);
+		assert.equal(reclaimed.status, "claimed");
+		releaseTransientModelRecoveryProbe(reclaimed, false);
+	});
+
 	it("reclaims a dead-pid claim and never steals a live process even after expiry", () => {
 		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
 		const candidate = "openai/gpt-4";
@@ -398,6 +420,31 @@ describe("model exclusions — transient recovery probes", () => {
 		} finally {
 			fs.rmSync(path.dirname(store), { recursive: true, force: true });
 		}
+	});
+
+	it("does not steal a recently created empty store lock", () => {
+		const lockPath = `${getExclusionsFilePath()}.store.lock`;
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+		fs.writeFileSync(lockPath, "", { flag: "wx" });
+		const errors = captureConsole("error", () => {
+			recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "timeout" });
+		});
+		assert.equal(fs.readFileSync(lockPath, "utf-8"), "");
+		assert.equal(getExcludedCount(), 0);
+		assert.equal(fs.existsSync(getExclusionsFilePath()), false);
+		assert.ok(errors.some((args) => String(args[0]).includes("Failed to persist a recorded exclusion")));
+		fs.rmSync(lockPath, { force: true });
+	});
+
+	it("reclaims a stale empty store lock", () => {
+		const lockPath = `${getExclusionsFilePath()}.store.lock`;
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+		fs.writeFileSync(lockPath, "", { flag: "wx" });
+		const ancient = new Date(Date.now() - 60_000);
+		fs.utimesSync(lockPath, ancient, ancient);
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "timeout" });
+		assert.equal(isExcluded("gpt-4", "openai"), true);
+		assert.equal(fs.existsSync(lockPath), false);
 	});
 
 	it("does not steal a replacement store lock when two reclaimers see the same stale lock", async () => {

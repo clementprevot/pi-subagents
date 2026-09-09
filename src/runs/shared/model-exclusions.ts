@@ -394,10 +394,23 @@ function processIsAlive(pid: number): boolean {
 	}
 }
 
+const PID_FILE_IN_PROGRESS_MS = 2_000;
+
+function pidFileIsLive(raw: string, mtimeMs: number): boolean {
+	try {
+		const parsed = JSON.parse(raw) as { pid?: unknown };
+		if (typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0) {
+			return processIsAlive(parsed.pid);
+		}
+	} catch { /* empty or partial create */ }
+	return Date.now() - mtimeMs < PID_FILE_IN_PROGRESS_MS;
+}
+
 type ProbeClaimSnapshot = {
 	raw: string;
 	ino: number;
 	size: number;
+	mtimeMs: number;
 	claim: StoredProbeClaim | undefined;
 };
 
@@ -421,7 +434,7 @@ function readProbeClaimSnapshot(claimPath: string): ProbeClaimSnapshot | "unread
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
 	}
-	return { raw, ino: stat.ino, size: stat.size, claim: parseStoredProbeClaim(raw) };
+	return { raw, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, claim: parseStoredProbeClaim(raw) };
 }
 
 function unlinkObservedFile(filePath: string, observed: { raw: string; ino: number; size: number }): boolean {
@@ -433,8 +446,9 @@ function unlinkObservedFile(filePath: string, observed: { raw: string; ino: numb
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt === 1) return false;
 			try {
-				const parsed = JSON.parse(fs.readFileSync(reclaimPath, "utf-8")) as { pid?: unknown };
-				if (typeof parsed.pid === "number" && processIsAlive(parsed.pid)) return false;
+				const leftoverStat = fs.statSync(reclaimPath);
+				const leftoverRaw = fs.readFileSync(reclaimPath, "utf-8");
+				if (pidFileIsLive(leftoverRaw, leftoverStat.mtimeMs)) return false;
 				fs.rmSync(reclaimPath, { force: true });
 				continue;
 			} catch {
@@ -505,7 +519,7 @@ export function claimTransientModelRecoveryProbe(candidate: string | undefined):
 	if (tryCreateProbeClaim(claimPath, owner)) return { status: "claimed", probe: { ...planned, owner } };
 	const existing = readProbeClaimSnapshot(claimPath);
 	if (existing === "unreadable") return { status: "in-flight" };
-	if (existing?.claim && processIsAlive(existing.claim.pid)) return { status: "in-flight" };
+	if (existing && pidFileIsLive(existing.raw, existing.mtimeMs)) return { status: "in-flight" };
 	if (existing && !unlinkObservedFile(claimPath, existing)) {
 		const replacement = readProbeClaimSnapshot(claimPath);
 		if (replacement === "unreadable" || (replacement?.claim && processIsAlive(replacement.claim.pid))) return { status: "in-flight" };
@@ -588,14 +602,7 @@ function acquireExclusionStoreLock(): string | undefined {
 				waitBriefly();
 				continue;
 			}
-			let live = false;
-			try {
-				const parsed = JSON.parse(raw) as { pid?: unknown };
-				live = typeof parsed.pid === "number" && processIsAlive(parsed.pid);
-			} catch {
-				live = false;
-			}
-			if (live) {
+			if (pidFileIsLive(raw, stat.mtimeMs)) {
 				waitBriefly();
 				continue;
 			}
