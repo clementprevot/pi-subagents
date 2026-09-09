@@ -175,7 +175,7 @@ export async function steerAsyncRun(input: {
 	}
 	const finalStatus = readStatus(asyncDir);
 	const finalResult = finalStatus?.steering ? actionResultFromSteeringStatus(finalStatus.steering, status.runId, requestId) : undefined;
-	const acceptedReply = (accepted: SteerActionResult) => {
+	const acceptedReply = (accepted: SteerActionResult): AgentToolResult<Details> => {
 		const acceptedState = accepted.state === "delivered" ? "delivered" : "queued";
 		return { content: [{ type: "text", text: steeringReceipt(input.message, `Steering ${acceptedState} for async run ${status.runId} (request ${requestId}).`) }], details: { mode: "management", results: [], steering: accepted } };
 	};
