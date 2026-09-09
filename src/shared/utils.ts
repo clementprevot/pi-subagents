@@ -10,7 +10,6 @@ import { validateAsyncStatusLaneMetadata } from "../runs/shared/lane-metadata.ts
 const DEFAULT_CONFIG_DIR_NAME = ".pi";
 const PI_CODING_AGENT_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 export const PI_CODING_AGENT_PACKAGE_ROOT_ENV = "PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT";
-export const PI_PACKAGE_DIR_ENV = "PI_PACKAGE_DIR";
 export const PROMPT_REDACTED = "[prompt redacted]";
 
 export function resolveWatchPath(
