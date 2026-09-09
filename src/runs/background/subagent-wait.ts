@@ -213,16 +213,12 @@ function matchesId(run: AsyncRunSummary, id: string): boolean {
 	return run.id === id || run.id.startsWith(id);
 }
 
-function sessionDetachedForegroundRuns(deps: SubagentWaitDeps): ForegroundResumeRun[] {
+function activeDetachedForegroundRuns(params: SubagentWaitParams, deps: SubagentWaitDeps): ForegroundResumeRun[] {
 	const sessionId = deps.state.currentSessionId;
 	if (!sessionId || !deps.state.foregroundRuns) return [];
-	return [...deps.state.foregroundRuns.values()].filter((run) =>
+	const runs = [...deps.state.foregroundRuns.values()].filter((run) =>
 		run.sessionId === sessionId && run.children.some((child) => child.status === "detached")
 	);
-}
-
-function activeDetachedForegroundRuns(params: SubagentWaitParams, deps: SubagentWaitDeps): ForegroundResumeRun[] {
-	const runs = sessionDetachedForegroundRuns(deps);
 	if (params.id) return runs.filter((run) => run.runId === params.id || run.runId.startsWith(params.id!));
 	return params.all === true ? runs : [];
 }
@@ -723,7 +719,7 @@ export async function waitForSubagents(
 	const recoveryNote = formatCompletionRecovery(completions);
 
 	if (waitForAll) {
-		const remainingForeground = !params.id ? sessionDetachedForegroundRuns(deps) : [];
+		const remainingForeground = !params.id ? activeDetachedForegroundRuns({ all: true }, deps) : [];
 		const foregroundResult = remainingForeground.length > 0
 			? await waitForSessionDetachedForegroundRuns(remainingForeground, signal, deps, startedAt, now, pollIntervalMs, timeoutMs)
 			: undefined;

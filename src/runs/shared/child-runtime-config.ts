@@ -86,7 +86,6 @@ export interface ChildRuntimeConfig {
 	/** Receives child watchdog status events. */
 	watchdogStatus?: (event: ChildWatchdogStatusEvent) => void;
 	waitTool: ResolvedWaitToolConfig;
-	/** Shared child bookkeeping so drain and fanout see the same remembered descendants. */
 	runtimeState?: SubagentState;
 	structuredOutput?: ChildStructuredOutput;
 	requiredTools?: string[];

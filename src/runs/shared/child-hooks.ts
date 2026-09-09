@@ -17,9 +17,7 @@ export interface ChildHookExtension {
 	factory: (pi: ExtensionAPI) => void;
 }
 
-type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements">> & {
-	runtimeState: NonNullable<ChildRuntimeConfig["runtimeState"]>;
-};
+type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements">>;
 type PromptProof = { config: ChildRuntimeConfig; snapshot: string; factories?: ChildHookExtension["factory"][]; observeNext?: ReadonlyDrainObservation; observation?: ReadonlyDrainObservation; capture?: OwnedCapture; reporting?: { launch: ChildSessionLaunch; callback: ChildSessionLaunch["onExtensionError"] } };
 const promptProofs = new WeakMap<ChildHookExtension["factory"], PromptProof>();
 
@@ -137,12 +135,8 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 	const capture: OwnedCapture = {
 		toolDiagnostic: (value) => { diagnostic = value; },
 		runtimeAcknowledgements: (ids) => { acknowledgedIds = ids; },
-		runtimeState: createChildSafeState(),
 	};
-	Object.assign(config, {
-		toolDiagnostic: capture.toolDiagnostic,
-		runtimeAcknowledgements: capture.runtimeAcknowledgements,
-	});
+	Object.assign(config, capture);
 	const hooks = childHooks(config, capture);
 	if (runner) {
 		hooks.push({ name: "pi-subagents:completion-intent", factory: (pi) => pi.on("session_start", (_event, childCtx) => {
@@ -167,7 +161,7 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHookExtension[] {
 	const snapshot = readonlyConfig(config, capture);
 	const proof: PromptProof | undefined = snapshot === undefined ? undefined : { config, snapshot, capture };
-	const runtime = { ...config, runtimeState: capture?.runtimeState ?? config.runtimeState ?? createChildSafeState() };
+	const runtime = { ...config, runtimeState: config.runtimeState ?? createChildSafeState() };
 	const hooks: ChildHookExtension[] = [
 		{ name: "pi-subagents:prompt-runtime", factory: function promptRuntime(pi) {
 			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, runtime);

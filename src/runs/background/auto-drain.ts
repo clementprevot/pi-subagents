@@ -24,12 +24,6 @@ function resultText(value: AgentToolResult<Details>): string {
 	return value.content.map((part) => part.type === "text" ? part.text : "").join(" ").trim();
 }
 
-function hasDetachedForegroundWork(state: SubagentState, sessionId: string): boolean {
-	return [...(state.foregroundRuns?.values() ?? [])].some((run) =>
-		run.sessionId === sessionId && run.children.some((child) => child.status === "detached")
-	);
-}
-
 function hasOutstandingWork(state: SubagentState, sessionId: string, nowMs: number, observation?: ReadonlyDrainObservation): boolean {
 	const asyncRuns = listAsyncRuns(DIRS.async, {
 		states: ["queued", "running"],
@@ -37,7 +31,10 @@ function hasOutstandingWork(state: SubagentState, sessionId: string, nowMs: numb
 		resultsDir: DIRS.results,
 		now: () => nowMs,
 	}, observation?.status);
-	return asyncRuns.length > 0 || snapshotBackgroundWork(sessionId, nowMs).items.length > 0 || hasDetachedForegroundWork(state, sessionId);
+	const detachedForeground = [...(state.foregroundRuns?.values() ?? [])].some((run) =>
+		run.sessionId === sessionId && run.children.some((child) => child.status === "detached")
+	);
+	return asyncRuns.length > 0 || snapshotBackgroundWork(sessionId, nowMs).items.length > 0 || detachedForeground;
 }
 
 /** Drain all work owned by the current headless session, including work added while draining. */
