@@ -45,6 +45,24 @@ describe("classifyTaskMutationIntent", () => {
 		);
 	});
 
+	it("does not treat review nouns or negated implement as follow-on work", () => {
+		for (const task of [
+			"Review only and fix any real issues",
+			"Review only. Check the update handler.",
+			"Review only. Inspect the create function.",
+			"Review-only: flag issues and suggest how to fix them",
+			"Read-only review of the add user endpoint",
+			"Review only. Determine whether they add tests.",
+			"Review only. Do not implement anything.",
+			"Review only; do not implement the approved fix.",
+		]) {
+			assert.equal(classifyTaskMutationIntent("delegate", task).kind, "read-only", task);
+			assert.equal(classifyTaskMutationIntent("worker", task).kind, "read-only", task);
+		}
+		assert.equal(classifyTaskMutationIntent("reviewer", "Review only and fix any real issues").kind, "read-only");
+		assert.equal(classifyTaskMutationIntent("reviewer", "Review this and fix any real issues").kind, "read-only");
+	});
+
 	it("stops the prohibition object before a following implementation clause", () => {
 		for (const task of [
 			"Do not modify tests but implement the fix",

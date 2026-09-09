@@ -44,7 +44,7 @@ const REVIEWER_REQUIRED_EDIT_PATTERNS = [
 // being swallowed as the object.
 // Accept serialized line separators too: workflow prompts can carry literal
 // `\\n`/`\\r\\n` between clauses instead of decoded newlines.
-const NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b((?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
+const NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+(?:edit|modify|write(?:\s+to)?|touch|change|implement)\b((?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
 const COORDINATED_NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+((?=(?:(?!\\(?:r\\n|n))[^.;:!?\n–—-])*\b(?:and|or)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b)(?:(?!\\(?:r\\n|n))[^.;:!?\n–—-])*?\b(?:and|or)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b(?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
 
 /** Objects of a no-edit prohibition that mean "the codebase in general" rather than a named scope. */
@@ -107,15 +107,18 @@ const WORKER_IMPLEMENTATION_PATTERNS = [
 	/\bdo those fixes\b/i,
 ];
 
-const FOLLOW_ON_IMPLEMENTATION_PATTERN = /\b(?:fix|patch|update|add|remove|replace|create|delete)\s+(?!(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?[a-z][\w./-]*/i;
+const FOLLOW_ON_IMPLEMENTATION_PATTERN = /(?:^|[.!?:;,\n])\s*(?:fix|patch|update|add|remove|replace|create|delete)\s+(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)(?!(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)[a-z][\w./-]*/i;
 const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/i;
-
-const GENERAL_IMPLEMENTATION_PATTERNS = [
+const EXPLICIT_IMPLEMENTATION_PATTERNS = [
 	/\b(?:implement|edit|modify|refactor)\b/i,
-	FIX_OR_PATCH_IMPLEMENTATION_PATTERN,
 	/\bapply\s+(?:the\s+)?(?:(?:suggested|proposed|recommended)\s+)?(?:changes?|fix(?:es)?|patch)\b/i,
 	/\bmake\s+(?:the\s+)?changes\b/i,
 	/\bdo those fixes\b/i,
+];
+
+const GENERAL_IMPLEMENTATION_PATTERNS = [
+	...EXPLICIT_IMPLEMENTATION_PATTERNS,
+	FIX_OR_PATCH_IMPLEMENTATION_PATTERN,
 	/\b(?:update|add|remove|replace|delete|create)\s+(?:the\s+)?(?:file|files|code|source|implementation|test|tests|component|function|module|class|method|logic|import|imports|readme|docs?|changelog|package\.json|config|manifest|extension|prompt|command)\b/i,
 ];
 
@@ -187,7 +190,12 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
 	if (prohibitions.present) {
 		if (prohibitions.blanket) return { kind: "read-only" };
-		return hasImplementationIntent(agent, prohibitions.strippedText) || FOLLOW_ON_IMPLEMENTATION_PATTERN.test(prohibitions.strippedText)
+		const remaining = prohibitions.strippedText;
+		if (isReviewerStyleAgent(agent)) {
+			return hasImplementationIntent(agent, remaining) ? { kind: "implementation" } : { kind: "read-only" };
+		}
+		return EXPLICIT_IMPLEMENTATION_PATTERNS.some((pattern) => pattern.test(remaining))
+			|| FOLLOW_ON_IMPLEMENTATION_PATTERN.test(remaining)
 			? { kind: "implementation" }
 			: { kind: "read-only" };
 	}
