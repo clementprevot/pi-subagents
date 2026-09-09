@@ -67,6 +67,30 @@ function resolveBoundRemoteFile(projectDir: string, raw: string): string {
 	return file;
 }
 
+function remoteWriteScript(file: string, encoded: string): string {
+	return [
+		"set -eu",
+		"root=$(pwd -P)",
+		"inside() { case \"$1\" in \"$root\"|\"$root\"/*) ;; *) echo \"Remote path is outside the bound project.\" >&2; exit 1 ;; esac; }",
+		`file=${sshQuote(file)}`,
+		"base=$(basename -- \"$file\")",
+		"orig=$(dirname -- \"$file\")",
+		"exist=$orig",
+		"while [ ! -e \"$exist\" ]; do nxt=$(dirname -- \"$exist\"); test \"$nxt\" != \"$exist\"; exist=$nxt; done",
+		"phys=$(cd -- \"$exist\" && pwd -P)",
+		"inside \"$phys\"",
+		"if [ \"$exist\" = \"$orig\" ]; then dest=$phys; else dest=$phys/${orig#\"$exist\"/}; fi",
+		"inside \"$dest\"",
+		"mkdir -p -- \"$dest\"",
+		"dest=$(cd -- \"$dest\" && pwd -P)",
+		"inside \"$dest\"",
+		"target=$dest/$base",
+		"if [ -L \"$target\" ]; then command -v readlink >/dev/null; t=$target; n=0; while [ -L \"$t\" ]; do n=$((n+1)); test \"$n\" -lt 32; l=$(readlink \"$t\"); case \"$l\" in /*) t=$l ;; *) t=$(dirname -- \"$t\")/$l ;; esac; done; test -d \"$(dirname -- \"$t\")\"; target=$(cd -- \"$(dirname -- \"$t\")\" && pwd -P)/$(basename -- \"$t\"); fi",
+		"case \"$target\" in \"$root\"/*) ;; *) echo \"Remote path is outside the bound project.\" >&2; exit 1 ;; esac",
+		`printf '%s' ${sshQuote(encoded)} | base64 -d | dd of="$target" 2>/dev/null`,
+	].join("\n");
+}
+
 export function createSshProjectTools(profile: SshProjectBootstrap, selectedTools?: readonly string[]): ToolDefinition[] {
 	const read: ToolDefinition = {
 		name: "read", label: "read", description: "Read bounded remote UTF-8 text, or an explicitly selected local Markdown snapshot with scope=local-resource.",
@@ -122,7 +146,7 @@ export function createSshProjectTools(profile: SshProjectBootstrap, selectedTool
 			const bytes = Buffer.from(args.content, "utf8");
 			if (bytes.length > 262144) throw new Error("Remote text write exceeds 256 KiB.");
 			const file = resolveBoundRemoteFile(profile.projectDir, args.path);
-			await runSshProject(profile, `set -eu\nmkdir -p ${sshQuote(path.posix.dirname(file))}\nprintf '%s' ${sshQuote(bytes.toString("base64"))} | base64 -d | dd of=${sshQuote(file)} 2>/dev/null`, signal);
+			await runSshProject(profile, remoteWriteScript(file, bytes.toString("base64")), signal);
 			return { content: [{ type: "text", text: `Wrote ${bytes.length} bytes to ${file}` }], details: { path: file, bytes: bytes.length } };
 		},
 	};
