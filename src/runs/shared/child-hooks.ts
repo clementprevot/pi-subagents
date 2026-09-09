@@ -132,12 +132,13 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 	let diagnostic: ChildToolDiagnostic | undefined;
 	let acknowledgedIds: string[] | undefined;
 	let completionIntentContext: ArbiterModelContext | undefined;
+	let finalDrainHeld = false;
 	const capture: OwnedCapture = {
 		toolDiagnostic: (value) => { diagnostic = value; },
 		runtimeAcknowledgements: (ids) => { acknowledgedIds = ids; },
 	};
 	Object.assign(config, capture);
-	const hooks = childHooks(config, capture);
+	const hooks = childHooks(config, capture, (held) => { finalDrainHeld = held; });
 	if (runner) {
 		hooks.push({ name: "pi-subagents:completion-intent", factory: (pi) => pi.on("session_start", (_event, childCtx) => {
 			// Retain only attempt model services and the session id string, not the live child session.
@@ -155,13 +156,14 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 		completionIntentContext: () => completionIntentContext,
 		toolDiagnostic: () => diagnostic,
 		runtimeAcknowledgedExtensions: () => acknowledgedIds ? projectRuntimeAcknowledgedExtensions(acknowledgedIds) : undefined,
+		finalDrainHeld: () => finalDrainHeld,
 	};
 }
 
-function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHookExtension[] {
+function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture, holdFinalDrain?: (held: boolean) => void): ChildHookExtension[] {
 	const snapshot = readonlyConfig(config, capture);
 	const proof: PromptProof | undefined = snapshot === undefined ? undefined : { config, snapshot, capture };
-	const runtime = { ...config, runtimeState: config.runtimeState ?? createChildSafeState() };
+	const runtime = { ...config, runtimeState: config.runtimeState ?? createChildSafeState(), ...(holdFinalDrain ? { holdFinalDrain } : {}) };
 	const hooks: ChildHookExtension[] = [
 		{ name: "pi-subagents:prompt-runtime", factory: function promptRuntime(pi) {
 			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, runtime);

@@ -125,6 +125,7 @@ export interface InProcessChildCapture {
 	structuredOutput(): { called: boolean; value?: unknown; acceptanceReport?: unknown; acceptanceReportProvided: boolean };
 	toolDiagnostic(): ChildToolDiagnostic | undefined;
 	runtimeAcknowledgedExtensions(): RuntimeAcknowledgedChildExtensions | undefined;
+	finalDrainHeld(): boolean;
 }
 
 export interface InProcessChildLaunch {
@@ -318,6 +319,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 			structuredOutput: () => ({ called: structuredCalled, value: structuredValue, acceptanceReport: structuredAcceptanceReport, acceptanceReportProvided: structuredAcceptanceProvided }),
 			toolDiagnostic: capturedHooks.toolDiagnostic,
 			runtimeAcknowledgedExtensions: capturedHooks.runtimeAcknowledgedExtensions,
+			finalDrainHeld: capturedHooks.finalDrainHeld,
 		},
 		launchResolvedExtensions,
 		warnings: toolPlan.warnings,

@@ -15,7 +15,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
-- Wait for remembered detached foreground descendants before parent settlement. Thanks to [@shaharmor](https://github.com/shaharmor) for #2051.
+- Wait for remembered detached foreground descendants before parent settlement, without aborting a result-bearing child on the runner grace window. Thanks to [@shaharmor](https://github.com/shaharmor) for #2051.
 - Parse the full stdout of `orca terminal create --json` so the observer manifest stores `orcaHandle` / `orcaTabId` / `orcaTitle` instead of `orcaRaw: "}"`. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Keep workflow child tool exposure aligned with advertised agent tools when auto-discovered extensions wrap Pi builtins, and relocate auto-selected extension-repo worktrees outside Pi's extension auto-discovery directory (#2059).
 - Run the child prompt filter before ambient extensions inspect the system prompt. This keeps provider bridges aligned with the final child-visible context while preserving intentional global-context and parent-only skill exclusions. Thanks to [@leftytennis](https://github.com/leftytennis) for #2043.

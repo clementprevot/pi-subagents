@@ -87,6 +87,7 @@ export interface ChildRuntimeConfig {
 	watchdogStatus?: (event: ChildWatchdogStatusEvent) => void;
 	waitTool: ResolvedWaitToolConfig;
 	runtimeState?: SubagentState;
+	holdFinalDrain?: (held: boolean) => void;
 	structuredOutput?: ChildStructuredOutput;
 	requiredTools?: string[];
 	mcpDirectTools?: string[];
