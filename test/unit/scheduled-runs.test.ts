@@ -907,6 +907,105 @@ describe("recurring schedule execution", () => {
 		assert.equal(h.launches.length, 1);
 	});
 
+	it("a successful manual launch on an interval schedule advances the anchor a full interval and re-arms the natural fire", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "manual-interval", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		h.clock.now += 5 * 60_000;
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "manual-interval" }, h.ctx);
+		await flush();
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-async" } });
+		assert.match(text(await manual), /Next natural fire: 2030-01-01T01:05:00.000Z/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "manual-interval" }, h.ctx)), /Next: 2030-01-01T01:05:00.000Z/);
+		const events = fs.readFileSync(path.join(scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores")), "manual-interval", "events.jsonl"), "utf-8");
+		assert.match(events, /"event":"schedule.manual_satisfied"/);
+		h.manager.handleAsyncCompletion({ runId: "manual-async", success: true });
+		h.clock.now += 3_600_000;
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 2, "the re-armed timer fires a natural launch at the advanced anchor");
+	});
+
+	it("a successful manual launch consumes a one-shot schedule so its natural trigger never fires", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "manual-once", at: "+1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "manual-once" }, h.ctx);
+		await flush();
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "once-async" } });
+		assert.match(text(await manual), /Next natural fire: none \(schedule satisfied\)/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "manual-once" }, h.ctx)), /Next: none/);
+		h.manager.handleAsyncCompletion({ runId: "once-async", success: true });
+		h.clock.now += 86_400_000;
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 1, "the consumed one-shot never fires naturally");
+	});
+
+	it("an overlap-skipped manual launch leaves the natural anchor unchanged", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "manual-skip", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const first = h.manager.handleToolCall({ action: "schedule.run", id: "manual-skip" }, h.ctx);
+		await flush();
+		const second = await h.manager.handleToolCall({ action: "schedule.run", id: "manual-skip" }, h.ctx);
+		assert.match(text(second), /skipped/);
+		assert.match(text(second), /Next natural fire: 2030-01-01T01:00:00.000Z/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "manual-skip" }, h.ctx)), /Next: 2030-01-01T01:00:00.000Z/);
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "skip-async" } });
+		await first;
+	});
+
+	it("a failed manual launch leaves the natural anchor unchanged", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "manual-failed", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "manual-failed" }, h.ctx);
+		await flush();
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "spawn failed" }], details: { mode: "management", results: [] }, isError: true });
+		const result = await manual;
+		assert.match(text(result), /failed_launch/);
+		assert.match(text(result), /Next natural fire: 2030-01-01T01:00:00.000Z/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "manual-failed" }, h.ctx)), /Next: 2030-01-01T01:00:00.000Z/);
+	});
+
+	it("a failed manual launch still honors a natural fire that overlapped while attachment was pending", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "overlap-fail", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "overlap-fail" }, h.ctx);
+		await flush();
+		assert.equal(h.launches.length, 1);
+		h.clock.now += 3_600_000;
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 1, "the due natural fire skips while the manual claim is pending");
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "spawn failed" }], details: { mode: "management", results: [] }, isError: true });
+		const result = await manual;
+		assert.match(text(result), /failed_launch/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "overlap-fail" }, h.ctx)), /Next: 2030-01-01T01:00:00.000Z/);
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 2, "the skipped natural slot still fires after the failed manual launch");
+		h.launches[1]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "natural-after-fail" } });
+		await flush();
+		const history = text(await h.manager.handleToolCall({ action: "schedule.history", id: "overlap-fail" }, h.ctx));
+		assert.match(history, /failed_launch/);
+		assert.match(history, /skipped/);
+	});
+
+	it("a failed one-shot manual launch still honors a natural fire that overlapped while attachment was pending", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "once-overlap-fail", at: "+1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "once-overlap-fail" }, h.ctx);
+		await flush();
+		h.clock.now += 3_600_000;
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 1, "the due one-shot skips while the manual claim is pending");
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "spawn failed" }], details: { mode: "management", results: [] }, isError: true });
+		assert.match(text(await manual), /failed_launch/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "once-overlap-fail" }, h.ctx)), /Next: 2030-01-01T01:00:00.000Z/);
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 2, "the consumed-looking one-shot still fires after the failed manual launch");
+	});
+
 	it("distinguishes failed launch from failed async completion", async () => {
 		const h = harness();
 		await h.manager.handleToolCall({ action: "schedule.create", id: "failures", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
