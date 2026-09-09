@@ -30,6 +30,8 @@ import {
 import registerSubagentExtension from "../../src/extension/index.ts";
 import { handleSubagentControlNotice } from "../../src/extension/control-notices.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
+import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
 import {
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
@@ -303,6 +305,97 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(child?.outputMode, "file-only");
 		assert.deepEqual(child?.structuredOutput, { ok: true });
 		assert.deepEqual(JSON.parse(fs.readFileSync(configuredPath, "utf-8")), { ok: true });
+	});
+
+	it("matches preflight launch digest for structured foreground execution with a project-local refinement", { skip: !runSync ? "execution not importable" : undefined }, async () => {
+		const agentName = `digest-probe-${Date.now().toString(36)}`;
+		const task = "Answer only from the supplied synthetic text and return the requested structured result.";
+		const outputSchema = { type: "object" as const, required: ["ok"], properties: { ok: { type: "boolean" }, note: { type: "string" } } };
+		const permissionExtDir = path.join(agentDir, "extensions", "pi-permission-system");
+		fs.mkdirSync(path.join(permissionExtDir, "src"), { recursive: true });
+		fs.writeFileSync(path.join(permissionExtDir, "src", "index.ts"), "export default () => {};", "utf-8");
+		fs.writeFileSync(path.join(permissionExtDir, "package.json"), JSON.stringify({ name: "test", pi: { extensions: ["./src/index.ts"] } }), "utf-8");
+		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(agentPath, `---
+name: ${agentName}
+tools:
+extensions:
+systemPromptMode: replace
+inheritProjectContext: false
+inheritSkills: false
+defaultContext: fresh
+---
+
+Answer only from the supplied synthetic text and return the requested structured result.
+`, "utf-8");
+		const refinementPath = path.join(tempDir, ".pi", "subagents", "refinements", `${agentName}.md`);
+		fs.mkdirSync(path.dirname(refinementPath), { recursive: true });
+		fs.writeFileSync(refinementPath, `<!-- pi-subagents-refinement:v1
+{
+  "agent": ${JSON.stringify(agentName)},
+  "revision": 1,
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "base": {
+    "source": "project",
+    "filePath": ${JSON.stringify(agentPath)},
+    "systemPromptSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "evidence": {
+    "maxItems": 8,
+    "maxAgeDays": 14,
+    "itemBytes": 2048,
+    "totalBytes": 16384
+  }
+}
+-->
+
+# Current refinement for \`${agentName}\`
+
+\`\`\`pi-subagents-refinement-current
+When the task asks for a structured result, keep field names exactly as requested.
+\`\`\`
+
+# Snapshots
+
+\`\`\`pi-subagents-refinement-snapshots-json
+[]
+\`\`\`
+`, "utf-8");
+
+		const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
+		assert.ok(discovered, "expected temporary agent definition to be discovered");
+		const launchInput = {
+			agent: agentName,
+			cwd: tempDir,
+			task,
+			context: "fresh" as const,
+			outputSchema,
+			skill: false,
+			output: false,
+			artifacts: false,
+		};
+		const preflight = await resolveSubagentLaunchContract(launchInput);
+		assert.equal(preflight.ok, true);
+		if (!preflight.ok) return;
+		const overlayMarkdown = fs.readFileSync(refinementPath, "utf-8");
+		fs.rmSync(refinementPath);
+		const withoutOverlay = await resolveSubagentLaunchContract(launchInput);
+		assert.equal(withoutOverlay.ok, true);
+		if (!withoutOverlay.ok) return;
+		assert.notEqual(withoutOverlay.contract.launchContractDigest, preflight.contract.launchContractDigest);
+		fs.writeFileSync(refinementPath, overlayMarkdown, "utf-8");
+
+		const structured = createStructuredOutputRuntime(outputSchema, tempDir);
+		mockPi.onCall({ structuredOutput: { ok: true, note: "captured" } });
+		const foreground = await runSync(tempDir, [discovered], agentName, task, {
+			runId: "digest-probe-foreground",
+			acceptance: false,
+			structuredOutput: structured,
+		});
+		assert.equal(foreground.exitCode, 0, foreground.error);
+		assert.deepEqual(foreground.structuredOutput, { ok: true, note: "captured" });
+		assert.equal((foreground as { launchContractDigest?: string }).launchContractDigest, preflight.contract.launchContractDigest);
 	});
 
 	it("does not inject a workflow child output without an aggregate or explicit output", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

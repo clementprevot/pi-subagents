@@ -5,6 +5,7 @@ import { discoverAgentSnapshot, findBlockingAgentDiagnostic, formatUnknownAgentE
 import { resolveExecutionAgentScope } from "../agents/agent-scope.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../agents/agent-memory.ts";
+import { appendAgentRefinementOverlay } from "../agents/agent-refinements.ts";
 import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, type AvailableModelInfo, type ParentModel } from "../runs/shared/model-fallback.ts";
 import { resolveModelScopesForAgent } from "../runs/shared/model-scope.ts";
 import { applyThinkingSuffix, resolvePiLaunchToolPlan, type PiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
@@ -409,6 +410,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	}
 	const memoryInjection = buildAgentMemoryInjection(agent, effectiveCwd);
 	if (memoryInjection) effectiveSystemPrompt = effectiveSystemPrompt ? `${effectiveSystemPrompt}\n\n${memoryInjection}` : memoryInjection;
+	effectiveSystemPrompt = appendAgentRefinementOverlay(effectiveSystemPrompt, { cwd: effectiveCwd, agentName: agent.name });
 	effectiveSystemPrompt = injectOutputPathSystemPrompt(effectiveSystemPrompt, outputPath, agent);
 	const candidates = candidateList(input.agent, agent, discovery.all);
 	const shadowedCandidates = candidates.filter((candidate) => !candidate.selected);
