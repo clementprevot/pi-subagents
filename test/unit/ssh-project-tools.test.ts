@@ -123,7 +123,7 @@ test("SSH write sends exact remote path and bytes, overwrites, and fails closed"
 		assert(invocations[0]!.script.includes(sshQuote(file)));
 		assert(invocations[0]!.script.includes(sshQuote(Buffer.from(first, "utf8").toString("base64"))));
 		assert(invocations[0]!.script.includes("pwd -P"));
-		assert(invocations[0]!.script.includes('dd of="$target"'));
+		assert(invocations[0]!.script.includes('dd of="./$base" oflag=nofollow'));
 		assert(!invocations[0]!.script.includes(first));
 		assert(invocations[1]!.script.includes(sshQuote(Buffer.from(second, "utf8").toString("base64"))));
 		assert(!invocations[1]!.script.includes(sshQuote(Buffer.from(first, "utf8").toString("base64"))));
@@ -175,6 +175,9 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 	fs.writeFileSync(path.join(outside, "escape.txt"), "SAFE");
 	fs.symlinkSync(path.join(outside, "escape.txt"), path.join(remote, "leaf"));
 	fs.symlinkSync(outside, path.join(remote, "parent"));
+	fs.symlinkSync(path.join(outside, "missing"), path.join(remote, "dangling"));
+	fs.mkdirSync(path.join(remote, "realdir"));
+	fs.symlinkSync(path.join(outside, "escape.txt"), path.join(remote, "realdir", "swap.txt"));
 	const bound = snapshotSshProjectBootstrap({ target: "user@host", projectDir: remote, childProfile: "fresh-native-read-bash", localRuntime: { cwd: local, agentDir: local, projectTrusted: false, noContextFiles: true, projectDiscovery: "disabled" } });
 	const restore = installLocalSsh(remote);
 	try {
@@ -184,6 +187,13 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		await assert.rejects(() => write.execute("parent", { path: "parent/nested.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
 		assert(!fs.existsSync(path.join(outside, "nested.txt")));
+		await assert.rejects(() => write.execute("dangling", { path: "dangling/sub/file.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		assert(!fs.existsSync(path.join(outside, "missing")));
+		await assert.rejects(() => write.execute("swap", { path: "realdir/swap.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
+		const open = cp.spawnSync("/bin/dd", ["of=" + path.join(remote, "realdir", "swap.txt"), "oflag=nofollow"], { input: "ESCAPED", encoding: "utf8" });
+		assert.notEqual(open.status, 0);
+		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
 		assert.deepEqual(fs.readdirSync(local), []);
 	} finally {
 		restore();
