@@ -696,6 +696,16 @@ export class ScheduledRunManager {
 		}
 		if (params.quiet !== undefined && typeof params.quiet !== "boolean") return textResult("quiet must be a boolean.", undefined, undefined, true);
 		const run = await this.launch(store, schedule, this.now(), "manual", false, params.quiet === true);
+		const updated = store.get(schedule.id);
+		if (run.state === "running") {
+			const now = this.now();
+			if (updated.trigger.kind === "interval") updated.trigger.nextRunAt = timestamp(now + updated.trigger.everyMs);
+			else updated.trigger.nextRunAt = undefined;
+			updated.updatedAt = timestamp(now);
+			store.write(updated);
+			store.appendEvent(updated, "schedule.manual_satisfied");
+			this.arm(updated, store);
+		}
 		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
 	}
 
@@ -815,6 +825,7 @@ export class ScheduledRunManager {
 
 	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean, quiet?: boolean): Promise<ScheduleRunRecord> {
 		const now = this.now();
+		const nextRunAtBeforeClaim = schedule.trigger.nextRunAt;
 		const run: ScheduleRunRecord = { schemaVersion: 1, id: this.randomId(), scheduleId: schedule.id, plannedAt: timestamp(planned), dueReason, state: "running", startedAt: timestamp(now) };
 		if (schedule.activeRunId) {
 			run.state = "skipped";
@@ -868,12 +879,14 @@ export class ScheduledRunManager {
 			run.state = "failed_launch";
 			run.completedAt = timestamp(this.now());
 			run.error = error instanceof Error ? error.message : String(error);
-			schedule.activeRunId = undefined;
-			schedule.updatedAt = timestamp(this.now());
-			store.write(schedule);
-			store.writeRun(schedule, run, "schedule.run.failed");
+			const latest = store.get(schedule.id);
+			latest.activeRunId = undefined;
+			if (!advance && nextRunAtBeforeClaim) latest.trigger.nextRunAt = nextRunAtBeforeClaim;
+			latest.updatedAt = timestamp(this.now());
+			store.write(latest);
+			store.writeRun(latest, run, "schedule.run.failed");
 			fs.rmSync(lockPath, { force: true });
-			this.arm(schedule, store);
+			this.arm(latest, store);
 			return run;
 		}
 	}

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Add opt-in watchdog `fallbackModels` for main, children, and per-agent overrides, retrying provider failures only before tool work within the existing review deadline. Thanks to [@dwizzle204](https://github.com/dwizzle204) for #2075.
 - Add portable Inspect commands and a terminal-neutral plugin seam, including open-only Ghostty 1.3+ right splits on macOS. Thanks to [@tiratatp](https://github.com/tiratatp) for #2046.
 - Add an opt-in `quiet: true` flag for recurring `schedule.create`. A quiet schedule's successful automatic runs and successful workflow children keep their completion notices but no longer trigger a parent turn; failed, stopped, or paused outcomes still wake the session. One-shot `at` schedules and `schedule.run` stay noisy unless that launch passes `quiet: true`. Default behavior is unchanged. Thanks to [@pablontiv](https://github.com/pablontiv) for #2055.
 - Add opt-in `orcaProgressTabs.autoCloseDelaySec` to close Orca observer tabs after a successful run. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
@@ -19,6 +20,7 @@
 
 ### Fixed
 - Reject materialized workflow launch groups with invalid worktree repositories or dirty sources before dispatching children or claiming fan-out/output ownership. Allocation still rechecks; workflow-key failure traces may remain. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #2076.
+- A manual `schedule.run` that attaches a run satisfies the next natural fire, so manually-run schedules no longer double-fire (#2052). Thanks to [@brandonmwest](https://github.com/brandonmwest) for #2052.
 - Wait for remembered detached foreground descendants before parent settlement, without aborting a result-bearing child on the runner grace window. Thanks to [@shaharmor](https://github.com/shaharmor) for #2051.
 - Do not report owned process-tree cleanup as `observed` when a detached descendant remains active after the owned process group exits. Thanks to [@rtbe](https://github.com/rtbe) for #2053.
 - Ignore verbs inside filenames and path-like tokens when classifying implementation intent, so artifact names such as `daily-update.mp3` do not create an implementation obligation. Thanks to [@SiebertLanhove](https://github.com/SiebertLanhove) for #2039.

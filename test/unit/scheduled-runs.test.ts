@@ -962,6 +962,39 @@ describe("recurring schedule execution", () => {
 		assert.equal(h.launches.length, 1);
 	});
 
+	it("a successful manual launch satisfies the next natural fire", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "manual-interval", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		h.clock.now += 5 * 60_000;
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "manual-interval" }, h.ctx);
+		await flush();
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "manual-async" } });
+		await manual;
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "manual-interval" }, h.ctx)), /Next: 2030-01-01T01:05:00.000Z/);
+		h.manager.handleAsyncCompletion({ runId: "manual-async", success: true });
+		h.clock.now = Date.parse("2030-01-01T01:00:00.000Z");
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 1);
+	});
+
+	it("a failed manual launch still honors a natural fire that overlapped while attachment was pending", async () => {
+		const h = harness();
+		await h.manager.handleToolCall({ action: "schedule.create", id: "overlap-fail", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const manual = h.manager.handleToolCall({ action: "schedule.run", id: "overlap-fail" }, h.ctx);
+		await flush();
+		h.clock.now += 3_600_000;
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 1);
+		h.launches[0]!.resolve({ content: [{ type: "text", text: "spawn failed" }], details: { mode: "management", results: [] }, isError: true });
+		assert.match(text(await manual), /failed_launch/);
+		assert.match(text(await h.manager.handleToolCall({ action: "schedule.show", id: "overlap-fail" }, h.ctx)), /Next: 2030-01-01T01:00:00.000Z/);
+		h.timers.fireAll();
+		await flush();
+		assert.equal(h.launches.length, 2);
+	});
+
 	it("distinguishes failed launch from failed async completion", async () => {
 		const h = harness();
 		await h.manager.handleToolCall({ action: "schedule.create", id: "failures", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
