@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../src/shared/utils.ts";
+import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PI_PACKAGE_DIR_ENV } from "../../src/shared/utils.ts";
 
 test("executeAsyncSingle preloads all peer aliases before jiti when any aliases exist", async (t) => {
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "async-spawn-preload-")));
@@ -85,6 +85,7 @@ test("executeAsyncSingle preloads all peer aliases before jiti when any aliases 
 			const [command, args, options] = spawn.mock.calls.at(-1)!.arguments;
 			assert.ok(path.isAbsolute(command));
 			assert.equal(options.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV], host);
+			assert.equal(options.env[PI_PACKAGE_DIR_ENV], host);
 			const actualAliases = JSON.parse(options.env.JITI_ALIAS) as Record<string, string>;
 			assert.deepEqual(Object.fromEntries(Object.entries(actualAliases).map(([key, target]) => [key, fs.realpathSync(target)])), expectedAliases);
 			assert.equal(args[0], "--import");

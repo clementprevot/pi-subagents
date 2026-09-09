@@ -16,6 +16,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Override `PI_PACKAGE_DIR` in detached runners with the detected npm Pi package root so npm runtime assets resolve from that package instead of an inherited host path. Thanks to [@alvarosevilla95](https://github.com/alvarosevilla95) for #2050.
 - Preserve explicit read-only task intent after host capability clamping, while still blocking implementation tasks that lack mutation tools. Thanks to [@stekman08](https://github.com/stekman08) for #2060.
 - Parse the full stdout of `orca terminal create --json` so the observer manifest stores `orcaHandle` / `orcaTabId` / `orcaTitle` instead of `orcaRaw: "}"`. Thanks to [@G0-0000](https://github.com/G0-0000) for #2063.
 - Keep workflow child tool exposure aligned with advertised agent tools when auto-discovered extensions wrap Pi builtins, and relocate auto-selected extension-repo worktrees outside Pi's extension auto-discovery directory (#2059).

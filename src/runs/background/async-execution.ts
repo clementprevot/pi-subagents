@@ -27,7 +27,7 @@ import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { backgroundProcessOptions } from "../shared/background-process-options.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
-import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
+import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PI_PACKAGE_DIR_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -597,6 +597,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			env: {
 				...omitExtensionBindingsEnv(process.env),
 				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot,
+				[PI_PACKAGE_DIR_ENV]: piPackageRoot,
 				[JITI_ALIAS_ENV]: JSON.stringify(hostPeerAliases.aliases),
 			},
 		});
