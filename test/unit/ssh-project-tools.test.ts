@@ -123,6 +123,8 @@ test("SSH write sends exact remote path and bytes, overwrites, and fails closed"
 		assert(invocations[0]!.script.includes(sshQuote(file)));
 		assert(invocations[0]!.script.includes(sshQuote(Buffer.from(first, "utf8").toString("base64"))));
 		assert(invocations[0]!.script.includes("pwd -P"));
+		assert(invocations[0]!.script.includes('mkdir -- "./$comp"'));
+		assert(!invocations[0]!.script.includes("mkdir -p"));
 		assert(invocations[0]!.script.includes('dd of="./$base" oflag=nofollow'));
 		assert(!invocations[0]!.script.includes(first));
 		assert(invocations[1]!.script.includes(sshQuote(Buffer.from(second, "utf8").toString("base64"))));
@@ -191,6 +193,17 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		assert(!fs.existsSync(path.join(outside, "missing")));
 		await assert.rejects(() => write.execute("swap", { path: "realdir/swap.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
+		await assert.rejects(() => write.execute("comp", { path: "parent/deep/file.txt", content: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		assert(!fs.existsSync(path.join(outside, "deep")));
+		const planted = path.join(remote, "freshlink");
+		fs.symlinkSync(outside, planted);
+		const mkdirFollow = cp.spawnSync("/bin/mkdir", ["-p", "--", path.join(planted, "deep")], { encoding: "utf8" });
+		assert.equal(mkdirFollow.status, 0);
+		assert(fs.existsSync(path.join(outside, "deep")));
+		fs.rmSync(path.join(outside, "deep"), { recursive: true, force: true });
+		const mkdirLeaf = cp.spawnSync("/bin/mkdir", ["--", planted], { encoding: "utf8" });
+		assert.notEqual(mkdirLeaf.status, 0);
+		assert(!fs.existsSync(path.join(outside, "deep")));
 		const open = cp.spawnSync("/bin/dd", ["of=" + path.join(remote, "realdir", "swap.txt"), "oflag=nofollow"], { input: "ESCAPED", encoding: "utf8" });
 		assert.notEqual(open.status, 0);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
