@@ -398,7 +398,6 @@ type ProbeClaimSnapshot = {
 	raw: string;
 	ino: number;
 	size: number;
-	mtimeMs: number;
 	claim: StoredProbeClaim | undefined;
 };
 
@@ -422,7 +421,7 @@ function readProbeClaimSnapshot(claimPath: string): ProbeClaimSnapshot | "unread
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
 	}
-	return { raw, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, claim: parseStoredProbeClaim(raw) };
+	return { raw, ino: stat.ino, size: stat.size, claim: parseStoredProbeClaim(raw) };
 }
 
 function unlinkObservedFile(filePath: string, observed: { raw: string; ino: number; size: number }): boolean {
@@ -436,10 +435,6 @@ function unlinkObservedFile(filePath: string, observed: { raw: string; ino: numb
 	} catch {
 		return false;
 	}
-}
-
-function unlinkObservedProbeClaim(claimPath: string, observed: ProbeClaimSnapshot): boolean {
-	return unlinkObservedFile(claimPath, observed);
 }
 
 function tryCreateProbeClaim(claimPath: string, owner: string): boolean {
@@ -466,16 +461,7 @@ function tryCreateProbeClaim(claimPath: string, owner: string): boolean {
 	}
 }
 
-/**
- * Exclusive recovery election for one candidate.
- *
- * A claim file is required because the exclusion store is a shared cache, not a
- * lock. Foreground and detached runners can both observe "every candidate is
- * transiently excluded" and would each send a real provider request. One
- * O_EXCL/`wx` file next to the store is the existing exclusive-create primitive
- * (steering and schedule claims). Live PIDs block; dead or malformed files are
- * reclaimed. No successor chain or /proc identity.
- */
+/** Exclusive `wx` election for one recovery candidate. Live PIDs block; stale files are identity-checked before unlink. */
 export function claimTransientModelRecoveryProbe(candidate: string | undefined): ModelRecoveryProbeClaim {
 	if (!candidate) return { status: "not-eligible" };
 	const planned = planTransientModelRecoveryProbe([candidate]);
@@ -491,7 +477,7 @@ export function claimTransientModelRecoveryProbe(candidate: string | undefined):
 	const existing = readProbeClaimSnapshot(claimPath);
 	if (existing === "unreadable") return { status: "in-flight" };
 	if (existing?.claim && processIsAlive(existing.claim.pid)) return { status: "in-flight" };
-	if (existing && !unlinkObservedProbeClaim(claimPath, existing)) {
+	if (existing && !unlinkObservedFile(claimPath, existing)) {
 		const replacement = readProbeClaimSnapshot(claimPath);
 		if (replacement === "unreadable" || (replacement?.claim && processIsAlive(replacement.claim.pid))) return { status: "in-flight" };
 		if (replacement) return { status: "in-flight" };
