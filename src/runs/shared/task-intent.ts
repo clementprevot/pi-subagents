@@ -115,7 +115,10 @@ const WORKER_IMPLEMENTATION_PATTERNS = [
 // verbs visible even when their target is a project-specific noun (for example,
 // "Without edits, update the parser"). Output-only nouns remain excluded.
 const FOLLOW_ON_IMPLEMENTATION_PATTERN = /\b(?:fix|patch|update|add|remove|replace|create|delete)\s+(?!(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)?[a-z][\w./-]*/i;
-const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/gi;
+
+// Advisory how-to wording is stripped with other non-imperative markers so
+// "explain how to update" cannot leak into the later write-intent match.
+const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/i;
 
 const GENERAL_IMPLEMENTATION_PATTERNS = [
 	/\b(?:implement|edit|modify|refactor)\b/i,
@@ -163,7 +166,7 @@ function analyzeNoEditProhibitions(taskText: string): NoEditProhibitionAnalysis 
 	// prohibition: a later imperative such as "implement the fix" must still
 	// win. Explicit file prohibitions are analyzed below and may be blanket.
 	let blanket = false;
-	let strippedText = stripPatterns(taskText, [...REVIEW_ONLY_PATTERNS, ...NO_TOOL_INTENT_PATTERNS]);
+	let strippedText = stripPatterns(taskText, [...REVIEW_ONLY_PATTERNS, ...NO_TOOL_INTENT_PATTERNS, ADVISORY_INFINITIVE_PATTERN]);
 	if (readOnlyBoundary) strippedText = stripPatterns(strippedText, [NO_EDIT_BOUNDARY_ASSERTION_PATTERN]);
 	const stripNoEditProhibition = (match: string, object: string, offset: number, source: string): string => {
 		present = true;
@@ -197,8 +200,7 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
 	if (prohibitions.present) {
 		if (prohibitions.blanket) return { kind: "read-only" };
-		const imperativeText = prohibitions.strippedText.replace(ADVISORY_INFINITIVE_PATTERN, " ");
-		return hasImplementationIntent(agent, imperativeText) || FOLLOW_ON_IMPLEMENTATION_PATTERN.test(imperativeText)
+		return hasImplementationIntent(agent, prohibitions.strippedText) || FOLLOW_ON_IMPLEMENTATION_PATTERN.test(prohibitions.strippedText)
 			? { kind: "implementation" }
 			: { kind: "read-only" };
 	}
