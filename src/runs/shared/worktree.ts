@@ -621,15 +621,15 @@ export function shouldDeferWorktreeCwd(requested: WorktreeProvider | undefined, 
 /**
  * Resolves the dedicated worktree root: the configured base directory or
  * PI_SUBAGENTS_WORKTREE_DIR when set, otherwise a `worktrees` folder sibling
- * to the repository. Extension checkouts under Pi's auto-discovery directory
- * use the agent-level `worktrees` directory instead. Managed leaves always
- * nest one level deeper under the project folder (`basename(repoRoot)`).
+ * to the repository. Auto-selected extension checkouts under Pi's discovery
+ * directory use the agent-level `worktrees` directory instead. Managed leaves
+ * always nest one level deeper under the project folder (`basename(repoRoot)`).
  */
-function resolveWorktreeDedicatedRoot(configuredBaseDir: string | undefined, repoRoot: string): string {
+function resolveWorktreeDedicatedRoot(configuredBaseDir: string | undefined, repoRoot: string, relocateExtensionRepo = true): string {
 	const rawBaseDir = configuredBaseDir ?? process.env.PI_SUBAGENTS_WORKTREE_DIR;
 	let expanded: string;
 	if (rawBaseDir === undefined || (configuredBaseDir === undefined && !rawBaseDir.trim())) {
-		expanded = isInsidePiExtensionsDirectory(repoRoot)
+		expanded = relocateExtensionRepo && isInsidePiExtensionsDirectory(repoRoot)
 			? path.join(getAgentDir(), "worktrees")
 			: path.join(path.dirname(repoRoot), "worktrees");
 	} else {
@@ -1344,7 +1344,8 @@ async function allocateWorktrees(tx: SetupTransaction, cwd: string, runId: strin
 	const setupHook = resolveWorktreeSetupHook(repo.toplevel, options?.setupHook);
 	const provider = await resolveSetupProvider(tx, options?.provider, options?.baseDir, repo.toplevel);
 	const branchPrefix = normalizeWorktreeBranchPrefix(options?.branchPrefix);
-	const dedicatedRoot = provider === "native" ? resolveWorktreeDedicatedRoot(options?.baseDir, repo.toplevel) : undefined;
+	const relocateExtensionRepo = options?.provider === undefined || options.provider === "auto";
+	const dedicatedRoot = provider === "native" ? resolveWorktreeDedicatedRoot(options?.baseDir, repo.toplevel, relocateExtensionRepo) : undefined;
 	const worktrees = tx.progress.setup.worktrees;
 
 	try {
