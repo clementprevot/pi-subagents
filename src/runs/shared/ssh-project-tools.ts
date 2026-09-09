@@ -67,6 +67,28 @@ function resolveBoundRemoteFile(projectDir: string, raw: string): string {
 	return file;
 }
 
+async function readRemoteUtf8(profile: SshProjectBootstrap, file: string, signal?: AbortSignal): Promise<string> {
+	const encoded = await runSshProject(profile, `set -eu\ntest -f ${sshQuote(file)}\ntest -r ${sshQuote(file)}\ndd if=${sshQuote(file)} bs=1 count=262145 2>/dev/null | base64 | tr -d '\\n'`, signal);
+	if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) throw new Error("Invalid SSH read response.");
+	const bytes = Buffer.from(encoded, "base64");
+	if (bytes.length > 262144) throw new Error("Remote text read exceeds 256 KiB; use bounded remote bash instead.");
+	const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+	if (text.includes("\0")) throw new Error("Remote binary/image reads are unsupported.");
+	return text;
+}
+
+function assertRemoteEditReplacement(oldText: string, newText: string): void {
+	if (typeof oldText !== "string" || typeof newText !== "string" || oldText.includes("\0") || newText.includes("\0")) throw new Error("Remote binary/image writes are unsupported.");
+	if (!oldText) throw new Error("Remote edit requires one unique exact oldText match.");
+}
+
+function applyUniqueExactReplacement(text: string, oldText: string, newText: string): string {
+	assertRemoteEditReplacement(oldText, newText);
+	const parts = text.split(oldText);
+	if (parts.length === 2) return `${parts[0]}${newText}${parts[1]}`;
+	throw new Error(parts.length < 2 ? "Remote edit oldText was not found." : "Remote edit oldText is not unique.");
+}
+
 function remoteWriteScript(file: string, encoded: string): string {
 	return [
 		"set -eu",
@@ -132,13 +154,7 @@ export function createSshProjectTools(profile: SshProjectBootstrap, selectedTool
 			} else {
 				if (args.scope !== undefined && args.scope !== "project") throw new Error("Unsupported read scope.");
 				if (!args.path || /[\u0000-\u001f\u007f]/u.test(args.path)) throw new Error("Invalid remote path.");
-				const file = path.posix.resolve(profile.projectDir, args.path);
-				const encoded = await runSshProject(profile, `set -eu\ntest -f ${sshQuote(file)}\ntest -r ${sshQuote(file)}\ndd if=${sshQuote(file)} bs=1 count=262145 2>/dev/null | base64 | tr -d '\\n'`, signal);
-				if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(encoded)) throw new Error("Invalid SSH read response.");
-				const bytes = Buffer.from(encoded, "base64");
-				if (bytes.length > 262144) throw new Error("Remote text read exceeds 256 KiB; use bounded remote bash instead.");
-				text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-				if (text.includes("\0")) throw new Error("Remote binary/image reads are unsupported.");
+				text = await readRemoteUtf8(profile, path.posix.resolve(profile.projectDir, args.path), signal);
 			}
 			const start = (args.offset ?? 1) - 1;
 			const lines = text.split("\n"), limit = args.limit ?? 2000;
@@ -176,5 +192,24 @@ export function createSshProjectTools(profile: SshProjectBootstrap, selectedTool
 			return { content: [{ type: "text", text: `Wrote ${bytes.length} bytes to ${file}` }], details: { path: file, bytes: bytes.length } };
 		},
 	};
-	return selectedTools?.includes("write") ? [read, bash, write] : [read, bash];
+	const edit: ToolDefinition = {
+		name: "edit", label: "edit", description: "Replace one unique exact UTF-8 occurrence in a bound remote SSH project file.",
+		promptSnippet: "Edit remote project text with one exact unique replacement; no local filesystem fallback.",
+		parameters: Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String(), scope: Type.Optional(Type.String()) }),
+		async execute(_id, raw, signal) {
+			const args = raw as { path: string; oldText: string; newText: string; scope?: string };
+			if (args.scope !== undefined && args.scope !== "project") throw new Error("Unsupported edit scope.");
+			assertRemoteEditReplacement(args.oldText, args.newText);
+			const file = resolveBoundRemoteFile(profile.projectDir, args.path);
+			const next = applyUniqueExactReplacement(await readRemoteUtf8(profile, file, signal), args.oldText, args.newText);
+			const bytes = Buffer.from(next, "utf8");
+			if (bytes.length > 262144) throw new Error("Remote text write exceeds 256 KiB.");
+			await runSshProject(profile, remoteWriteScript(file, bytes.toString("base64")), signal);
+			return { content: [{ type: "text", text: `Edited ${file}` }], details: { path: file, bytes: bytes.length } };
+		},
+	};
+	const tools: ToolDefinition[] = [read, bash];
+	if (selectedTools?.includes("write")) tools.push(write);
+	if (selectedTools?.includes("edit")) tools.push(edit);
+	return tools;
 }

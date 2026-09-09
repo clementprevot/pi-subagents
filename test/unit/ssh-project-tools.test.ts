@@ -46,17 +46,20 @@ test("SSH public tool operations: quoting, selected documents, errors, cancellat
 	} finally { cp.spawn = original; syncBuiltinESMExports(); }
 });
 
-test("SSH write is omitted unless the bound agent selects it", () => {
+test("SSH write and edit are omitted unless the bound agent selects them", () => {
 	assert.deepEqual(createSshProjectTools(profile).map(tool => tool.name), ["read", "bash"]);
 	assert.deepEqual(createSshProjectTools(profile, ["read", "bash"]).map(tool => tool.name), ["read", "bash"]);
 	assert.deepEqual(createSshProjectTools(profile, ["read", "write"]).map(tool => tool.name), ["read", "bash", "write"]);
+	assert.deepEqual(createSshProjectTools(profile, ["read", "edit"]).map(tool => tool.name), ["read", "bash", "edit"]);
+	assert.deepEqual(createSshProjectTools(profile, ["read", "write", "edit"]).map(tool => tool.name), ["read", "bash", "write", "edit"]);
 });
 
-test("SSH selected agent may list write and still refuses edit", () => {
+test("SSH selected agent may list write or edit and still refuses grep", () => {
 	const agent = (tools: string) => `---\nname: ssh-worker\ndescription: SSH worker\ntools: ${tools}\nasync: false\ndefaultContext: fresh\nsystemPromptMode: append\n---\nBody`;
 	assert.deepEqual(loadSelectedAgentDocument({ path: `${process.cwd()}/agent.md`, content: agent("read,bash") }).tools, ["read", "bash"]);
 	assert.deepEqual(loadSelectedAgentDocument({ path: `${process.cwd()}/agent.md`, content: agent("read,write") }).tools, ["read", "write"]);
-	assert.throws(() => loadSelectedAgentDocument({ path: `${process.cwd()}/agent.md`, content: agent("read,edit") }), /unsupported execution capabilities/);
+	assert.deepEqual(loadSelectedAgentDocument({ path: `${process.cwd()}/agent.md`, content: agent("read,edit") }).tools, ["read", "edit"]);
+	assert.throws(() => loadSelectedAgentDocument({ path: `${process.cwd()}/agent.md`, content: agent("read,grep") }), /unsupported execution capabilities/);
 });
 
 test("SSH write rejects unsafe scope and path before transport and never touches the local project", async () => {
@@ -207,6 +210,139 @@ test("POSIX write refuses leaf and parent-dir symlink escape", { skip: process.p
 		const open = cp.spawnSync("/bin/dd", ["of=" + path.join(remote, "realdir", "swap.txt"), "oflag=nofollow"], { input: "ESCAPED", encoding: "utf8" });
 		assert.notEqual(open.status, 0);
 		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE");
+		assert.deepEqual(fs.readdirSync(local), []);
+	} finally {
+		restore();
+		fs.rmSync(remote, { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+		fs.rmSync(local, { recursive: true, force: true });
+	}
+});
+
+test("SSH edit rejects unsafe scope and path before transport and never touches the local project", async () => {
+	const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-local-"));
+	const original = cp.spawn;
+	const invocations: unknown[] = [];
+	cp.spawn = ((command: string, args: readonly string[], options: unknown) => {
+		invocations.push({ command, args, options });
+		throw new Error("transport must not start");
+	}) as typeof cp.spawn;
+	syncBuiltinESMExports();
+	try {
+		fs.writeFileSync(path.join(localRoot, "canary.txt"), "LOCAL");
+		const edit = createSshProjectTools(profile, ["edit"]).find(tool => tool.name === "edit")!;
+		await assert.rejects(() => edit.execute("scope", { path: "ok.txt", oldText: "a", newText: "b", scope: "local-resource" }, undefined, undefined, {} as never), /Unsupported edit scope/);
+		await assert.rejects(() => edit.execute("abs", { path: "/etc/passwd", oldText: "a", newText: "b" }, undefined, undefined, {} as never), /outside the bound project/);
+		await assert.rejects(() => edit.execute("escape", { path: "../secret", oldText: "a", newText: "b" }, undefined, undefined, {} as never), /outside the bound project/);
+		await assert.rejects(() => edit.execute("root", { path: ".", oldText: "a", newText: "b" }, undefined, undefined, {} as never), /outside the bound project/);
+		await assert.rejects(() => edit.execute("empty", { path: "", oldText: "a", newText: "b" }, undefined, undefined, {} as never), /Invalid remote path/);
+		await assert.rejects(() => edit.execute("ctrl", { path: "a\nb", oldText: "a", newText: "b" }, undefined, undefined, {} as never), /Invalid remote path/);
+		await assert.rejects(() => edit.execute("empty-old", { path: "ok.txt", oldText: "", newText: "b" }, undefined, undefined, {} as never), /unique exact/);
+		await assert.rejects(() => edit.execute("bin-old", { path: "ok.txt", oldText: "a\0b", newText: "x" }, undefined, undefined, {} as never), /binary/);
+		await assert.rejects(() => edit.execute("bin-new", { path: "ok.txt", oldText: "a", newText: "a\0b" }, undefined, undefined, {} as never), /binary/);
+		assert.deepEqual(invocations, []);
+		assert.deepEqual(fs.readdirSync(localRoot), ["canary.txt"]);
+		assert.equal(fs.readFileSync(path.join(localRoot, "canary.txt"), "utf8"), "LOCAL");
+	} finally { cp.spawn = original; syncBuiltinESMExports(); fs.rmSync(localRoot, { recursive: true, force: true }); }
+});
+
+test("SSH edit performs one unique replacement, refuses non-unique matches, and fails closed", async () => {
+	const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-cwd-"));
+	const original = cp.spawn;
+	const invocations: Array<{ command: string; args: readonly string[]; options: unknown; script: string }> = [];
+	let output = "", code: number | null = 0, hang = false, killed = false;
+	cp.spawn = ((command: string, args: readonly string[], options: unknown) => {
+		const child = new EventEmitter() as EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill(): boolean };
+		child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+		const invocation = { command, args, options, script: "" }; invocations.push(invocation);
+		child.kill = () => { killed = true; queueMicrotask(() => child.emit("close", null)); return true; };
+		child.stdin.on("data", chunk => { invocation.script += chunk; });
+		child.stdin.on("finish", () => { if (!hang) queueMicrotask(() => { child.stdout.emit("data", Buffer.from(output)); child.emit("close", code); }); });
+		return child;
+	}) as typeof cp.spawn;
+	syncBuiltinESMExports();
+	try {
+		fs.writeFileSync(path.join(localRoot, "canary.txt"), "LOCAL");
+		const edit = createSshProjectTools(profile, ["edit"]).find(tool => tool.name === "edit")!;
+		const relative = "dir ' $(touch BAD)`x`/file ' $(touch BAD)`.txt";
+		const file = path.posix.resolve(profile.projectDir, relative);
+		const source = "alpha $HOME && `touch LOCAL` ; unique\nalpha";
+		const next = "beta $HOME && `touch LOCAL` ; unique\nalpha";
+		output = Buffer.from(source).toString("base64");
+		const result = await edit.execute("first", { path: relative, oldText: "alpha $HOME && `touch LOCAL` ; unique", newText: "beta $HOME && `touch LOCAL` ; unique" }, undefined, undefined, {} as never);
+		assert.equal((result.details as { path: string; bytes: number }).path, file);
+		assert.equal((result.details as { bytes: number }).bytes, Buffer.byteLength(next));
+		assert.equal(invocations.length, 2);
+		assert(invocations[0]!.script.includes(`dd if=${sshQuote(file)}`));
+		assert(!invocations[0]!.script.includes("oflag=nofollow"));
+		assert(invocations[1]!.script.includes(sshQuote(file)));
+		assert(invocations[1]!.script.includes(sshQuote(Buffer.from(next, "utf8").toString("base64"))));
+		assert(invocations[1]!.script.includes("pwd -P"));
+		assert(invocations[1]!.script.includes('dd of="./$base" oflag=nofollow'));
+		assert(invocations[1]!.script.includes("set -C"));
+		assert(!invocations[1]!.script.includes(source));
+		output = Buffer.from("same same").toString("base64");
+		await assert.rejects(() => edit.execute("dup", { path: "ok.txt", oldText: "same", newText: "other" }, undefined, undefined, {} as never), /not unique/);
+		assert.equal(invocations.length, 3);
+		output = Buffer.from("nope").toString("base64");
+		await assert.rejects(() => edit.execute("missing", { path: "ok.txt", oldText: "absent", newText: "other" }, undefined, undefined, {} as never), /not found/);
+		assert.equal(invocations.length, 4);
+		code = 255; output = Buffer.from("ok").toString("base64");
+		await assert.rejects(() => edit.execute("fail", { path: "ok.txt", oldText: "ok", newText: "nope" }, undefined, undefined, {} as never), /no local fallback/);
+		hang = true; const controller = new AbortController();
+		const pending = edit.execute("abort", { path: "ok.txt", oldText: "ok", newText: "nope" }, controller.signal, undefined, {} as never);
+		controller.abort();
+		await assert.rejects(() => pending, /remote descendants\/completion may be uncertain/);
+		assert(killed);
+		assert.deepEqual(fs.readdirSync(localRoot), ["canary.txt"]);
+		assert.equal(fs.readFileSync(path.join(localRoot, "canary.txt"), "utf8"), "LOCAL");
+		assert(!fs.existsSync(path.join(localRoot, "ok.txt")));
+	} finally { cp.spawn = original; syncBuiltinESMExports(); fs.rmSync(localRoot, { recursive: true, force: true }); }
+});
+
+test("POSIX edit recipe replaces one unique occurrence and refuses non-unique or missing text", { skip: process.platform === "win32" }, async () => {
+	const remote = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-remote-"));
+	const local = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-local-"));
+	fs.writeFileSync(path.join(local, "canary.txt"), "LOCAL");
+	const relative = "dir ' $(touch BAD)`x`/file ' $(touch BAD)`.txt";
+	fs.mkdirSync(path.dirname(path.join(remote, relative)), { recursive: true });
+	const source = "hello $HOME && `touch LOCAL` ; unique\nhello";
+	fs.writeFileSync(path.join(remote, relative), source);
+	const bound = snapshotSshProjectBootstrap({ target: "user@host", projectDir: remote, childProfile: "fresh-native-read-bash", localRuntime: { cwd: local, agentDir: local, projectTrusted: false, noContextFiles: true, projectDiscovery: "disabled" } });
+	const restore = installLocalSsh(remote);
+	try {
+		const edit = createSshProjectTools(bound, ["edit"]).find(tool => tool.name === "edit")!;
+		await edit.execute("first", { path: relative, oldText: "hello $HOME && `touch LOCAL` ; unique", newText: "edited $HOME && `touch LOCAL` ; unique" }, undefined, undefined, {} as never);
+		assert.equal(fs.readFileSync(path.join(remote, relative), "utf8"), "edited $HOME && `touch LOCAL` ; unique\nhello");
+		await assert.rejects(() => edit.execute("dup", { path: relative, oldText: "e", newText: "X" }, undefined, undefined, {} as never), /not unique/);
+		await assert.rejects(() => edit.execute("missing", { path: relative, oldText: "absent", newText: "X" }, undefined, undefined, {} as never), /not found/);
+		assert.equal(fs.readFileSync(path.join(remote, relative), "utf8"), "edited $HOME && `touch LOCAL` ; unique\nhello");
+		assert.deepEqual(fs.readdirSync(local), ["canary.txt"]);
+		assert.equal(fs.readFileSync(path.join(local, "canary.txt"), "utf8"), "LOCAL");
+	} finally {
+		restore();
+		fs.rmSync(remote, { recursive: true, force: true });
+		fs.rmSync(local, { recursive: true, force: true });
+	}
+});
+
+test("POSIX edit refuses leaf and parent-dir symlink escape", { skip: process.platform === "win32" }, async () => {
+	const remote = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-bound-"));
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-out-"));
+	const local = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-edit-cwd-"));
+	fs.writeFileSync(path.join(outside, "escape.txt"), "SAFE unique");
+	fs.symlinkSync(path.join(outside, "escape.txt"), path.join(remote, "leaf"));
+	fs.symlinkSync(outside, path.join(remote, "parent"));
+	fs.writeFileSync(path.join(outside, "nested.txt"), "SAFE unique");
+	const bound = snapshotSshProjectBootstrap({ target: "user@host", projectDir: remote, childProfile: "fresh-native-read-bash", localRuntime: { cwd: local, agentDir: local, projectTrusted: false, noContextFiles: true, projectDiscovery: "disabled" } });
+	const restore = installLocalSsh(remote);
+	try {
+		const edit = createSshProjectTools(bound, ["edit"]).find(tool => tool.name === "edit")!;
+		for (const [id, file] of [["leaf", "leaf"], ["parent", "parent/nested.txt"]] as const) {
+			await assert.rejects(() => edit.execute(id, { path: file, oldText: "SAFE unique", newText: "ESCAPED" }, undefined, undefined, {} as never), /no local fallback/);
+		}
+		assert.equal(fs.readFileSync(path.join(outside, "escape.txt"), "utf8"), "SAFE unique");
+		assert.equal(fs.readFileSync(path.join(outside, "nested.txt"), "utf8"), "SAFE unique");
 		assert.deepEqual(fs.readdirSync(local), []);
 	} finally {
 		restore();

@@ -50,12 +50,12 @@ Ask Pi to delegate to the selected agent with `async:false` and `context:fresh`.
 - The launcher preflights an empty, package-owned `ssh-control` directory under the normal agent directory before stock Pi can run cwd migrations or read cwd settings. Do not put project files there. It refuses a contaminated or symlinked control directory rather than cleaning it.
 - Project settings, packages, extensions, skills, SYSTEM/APPEND_SYSTEM and unrelated local project AGENTS files are not substituted for remote project resources. Automatic global extension/skill/prompt-template activation is also disabled; use explicit selections.
 - Intended global agent-directory context is restored explicitly. Remote AGENTS/CLAUDE candidates are read root-to-project in Pi's candidate order. Remote `.pi` configuration/executable resource discovery is unsupported. Symlinked project-directory identity is rejected; specify its physical POSIX path.
-- Agent and selected skill Markdown are bounded immutable local snapshots, not directory grants or stock `/skill:` commands. `read` defaults to the remote project. `scope: "local-resource"` reads only the exact path of a selected Markdown snapshot; it does not expose helpers, assets, neighboring files or credentials. Relative links do not grant access. Text `write` stays in the bound remote project and refuses symlink escape; it does not follow a swapped-outward leaf or dest component. This remains execution routing, **not a sandbox**.
+- Agent and selected skill Markdown are bounded immutable local snapshots, not directory grants or stock `/skill:` commands. `read` defaults to the remote project. `scope: "local-resource"` reads only the exact path of a selected Markdown snapshot; it does not expose helpers, assets, neighboring files or credentials. Relative links do not grant access. Text `write` and `edit` stay in the bound remote project and refuse symlink escape; they do not follow a swapped-outward leaf or dest component. `edit` performs one exact unique replacement and reuses the protected write path. This remains execution routing, **not a sandbox**.
 - Child sessions and results remain local. Remote target identity contributes to the launch binding digest. A registered SSH session cannot silently launch an ordinary local child.
 
 ## Supported profile and refusals
 
-Selected agents may specify name, description, model/thinking, read/bash tools, optional text `write`, foreground/fresh defaults, timeout/tool timeout and the supported context settings. Use `systemPromptMode: append`; project/global context remains enabled and skills are explicitly selected rather than automatically inherited. Other frontmatter requirements are rejected, not dropped. `write` is provided only when the bound agent lists it.
+Selected agents may specify name, description, model/thinking, read/bash tools, optional text `write`/`edit`, foreground/fresh defaults, timeout/tool timeout and the supported context settings. Use `systemPromptMode: append`; project/global context remains enabled and skills are explicitly selected rather than automatically inherited. Other frontmatter requirements are rejected, not dropped. `write` and `edit` are provided only when the bound agent lists them.
 
 The following are unsupported and rejected: workflows/chains/parallel scripts, background/detach, fork/resume/recovery, nested delegation, managed worktrees and hooks, local Git/acceptance checks, explicit output/progress files, structured-output contracts, project management and resource reload/session replacement. Models may retry within their initialized session, but automatic fresh-session/retained-session relaunch is disabled.
 
@@ -65,7 +65,7 @@ Conflicting configured worktrees, forced async, permission contracts, budgets, i
 
 An explicitly enabled global subagent watchdog is also unsupported: this entry rejects that policy rather than silently turning it off. The ordinary local watchdog is not constructed for remote projects, because its settings/Git readers operate locally.
 
-`edit`, `grep`, `find`, `ls`, PowerShell and image/binary reads are not provided. Search/edit/build/test can be performed through remote Bash. Trusted provider extensions are still trusted local code; this is execution routing, **not a sandbox**.
+`grep`, `find`, `ls`, PowerShell and image/binary reads are not provided. Search/build/test can be performed through remote Bash. Trusted provider extensions are still trusted local code; this is execution routing, **not a sandbox**.
 
 ## Bounds and cancellation
 
