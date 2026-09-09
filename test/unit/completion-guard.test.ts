@@ -418,6 +418,15 @@ test("review finding classifications are not implementation launch obligations",
 	}).triggered, false);
 });
 
+test("quoted review categories allow version punctuation without hiding trailing fixes", () => {
+	const task = 'Classify findings as "must fix before v1.0" vs "must fix before v2.0".';
+	const tools = ["read", "grep", "find", "ls"];
+	assert.equal(validateImplementationToolContract({ agent: "reviewer", task, tools }), undefined);
+	assert.match(validateImplementationToolContract({
+		agent: "reviewer", task: `${task} You must fix the bug before enabling the feature.`, tools,
+	}) ?? "", /no mutation-capable tools/);
+});
+
 test("review classification wording does not hide actual required fixes", () => {
 	const classification = 'Classify findings as "must fix before ENABLING" vs "must fix before MERGING disabled code"';
 	for (const task of [
