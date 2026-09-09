@@ -163,7 +163,14 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture, holdFinalDrain?: (held: boolean) => void): ChildHookExtension[] {
 	const snapshot = readonlyConfig(config, capture);
 	const proof: PromptProof | undefined = snapshot === undefined ? undefined : { config, snapshot, capture };
-	const runtime = { ...config, runtimeState: config.runtimeState ?? createChildSafeState(), ...(holdFinalDrain ? { holdFinalDrain } : {}) };
+	const runtime = Object.create(config) as ChildRuntimeConfig;
+	const ownedState = Object.getOwnPropertyDescriptor(config, "runtimeState");
+	if (!ownedState || !("value" in ownedState) || ownedState.value == null) {
+		Object.defineProperty(runtime, "runtimeState", { configurable: true, enumerable: true, writable: true, value: createChildSafeState() });
+	}
+	if (holdFinalDrain) {
+		Object.defineProperty(runtime, "holdFinalDrain", { configurable: true, enumerable: true, writable: true, value: holdFinalDrain });
+	}
 	const hooks: ChildHookExtension[] = [
 		{ name: "pi-subagents:prompt-runtime", factory: function promptRuntime(pi) {
 			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, runtime);
