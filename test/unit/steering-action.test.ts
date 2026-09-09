@@ -210,6 +210,42 @@ describe("acknowledged steering action", () => {
 		}
 	});
 
+	it("does not recover after the runner records queued acceptance", async () => {
+		const runId = `steer-queued-ack-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		writeStatus(asyncDir, runningStatus(runId));
+		let request: SteerRequest | undefined;
+		let interrupted = false;
+		let recovered = false;
+		let attemptedRecovery = false;
+		try {
+			const result = await steerAsyncRun({
+				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25,
+				kill: (_pid, signal) => { if (signal !== 0) interrupted = true; return true; },
+				onRequestQueued: (requestPath) => {
+					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
+					const acknowledged = runningStatus(runId);
+					projectRequest(acknowledged, request, ["routed"]);
+					updateSteeringTarget(acknowledged.steering!, request.id, 0, "queued", Date.now());
+					updateSteeringTarget(acknowledged.steps![0]!.steering!, request.id, 0, "queued", Date.now());
+					writeStatus(asyncDir, acknowledged);
+				},
+				onBeforeRecoveryClaim: () => { attemptedRecovery = true; },
+				recover: async () => { recovered = true; return successResult("replacement"); },
+			});
+			assert.equal(result.isError, undefined);
+			assert.equal(result.details.steering?.deliveryStatus, "queued");
+			assert.match(result.content[0]!.text, /Steering queued/);
+			assert.equal(interrupted, false);
+			assert.equal(recovered, false);
+			assert.equal(attemptedRecovery, false);
+			assert.ok(request);
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", `${Buffer.from(request.id).toString("base64url")}.json`)), false);
+		} finally {
+			removeAsyncDir(asyncDir);
+		}
+	});
+
 	it("honors an acknowledgment persisted before recovery commit without interrupting", async () => {
 		const runId = `steer-final-ack-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);

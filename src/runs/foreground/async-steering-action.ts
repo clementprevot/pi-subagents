@@ -173,8 +173,11 @@ export async function steerAsyncRun(input: {
 	if (finalResult?.state === "delivered") {
 		return { content: [{ type: "text", text: steeringReceipt(input.message, `Steering delivered for async run ${status.runId} (request ${requestId}).`) }], details: { mode: "management", results: [], steering: finalResult } };
 	}
+	const acceptedTargets = finalResult?.targets ?? [];
+	const childAccepted = acceptedTargets.length > 0
+		&& acceptedTargets.every((target) => target.state === "queued" || target.state === "delivered");
 	const running = (finalStatus?.steps ?? status.steps ?? []).filter((step) => step.status === "running");
-	const recoveryAllowed = (input.mode ?? "steer") === "steer" && status.mode === "single" && status.isNested !== true && running.length === 1 && Boolean(finalStatus?.steering) && (input.index === undefined || input.index === 0);
+	const recoveryAllowed = (input.mode ?? "steer") === "steer" && status.mode === "single" && status.isNested !== true && running.length === 1 && Boolean(finalStatus?.steering) && (input.index === undefined || input.index === 0) && !childAccepted;
 	if (recoveryAllowed && finalResult?.state !== "scheduled" && input.recover) {
 		const appendSteeringNotice = (state: "failed" | "recovered", message: string): void => {
 			try {
