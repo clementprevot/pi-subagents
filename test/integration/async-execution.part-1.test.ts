@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { events, makeAgent, makeMinimalCtx, resolveMockPiCallArgs } from "../support/helpers.ts";
+import { captureAsyncResultTimeout } from "../support/async-result-diagnostic.ts";
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import { registerWorkflowResource } from "../../src/api/workflow-resources.ts";
 import type { WorkflowReceipt } from "../../src/workflows/workflow-receipt.ts";
@@ -157,35 +158,55 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
-	it("summarizes result-wait evidence without exposing artifact contents", async () => {
+	it("captures bounded result-wait evidence without exposing artifact contents", async () => {
 		const id = `async-wait-diagnostic-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, id);
 		fs.mkdirSync(asyncDir, { recursive: true });
+		const previous = process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR;
+		process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR = path.join(tempDir, "diagnostics");
 		try {
-			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ state: "running", steps: [{ status: "pending" }], task: "secret-prompt" }));
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ runId: id, sessionId: "session-1", state: "running", startedAt: 123, processTerminal: { runnerProcessInstanceId: "secret-instance" }, steps: [{ status: "pending" }], task: "secret-prompt" }));
+			fs.writeFileSync(path.join(asyncDir, "process-terminal.json"), JSON.stringify({ runId: id, state: "pending", runnerProcessInstanceId: "secret-instance" }));
 			fs.writeFileSync(path.join(asyncDir, "runner.stdout.log"), "");
 			fs.mkdirSync(path.join(asyncDir, "runner.stderr.log"));
 			fs.writeFileSync(path.join(asyncDir, "runner-startup-proceed.json"), JSON.stringify({ token: "secret-token" }));
-			fs.writeFileSync(path.join(asyncDir, "events.jsonl"), "secret-event-output\n");
-			const checkTimeout = async (stepState: string, callCount: number) => {
-				await assert.rejects(waitForAsyncResultFile(id, -1), (error: unknown) => {
-					assert.ok(error instanceof Error);
-					assert.match(error.message, new RegExp(`"steps":\\["${stepState}"\\]`));
-					assert.ok(error.message.includes(`mock queue: readable, prompt call records=${callCount}`));
-					assert.match(error.message, /runner.stdout.log: empty/);
-					assert.match(error.message, /runner.stderr.log: unreadable \(EISDIR\)/);
-					assert.match(error.message, /process-terminal.json: absent/);
-					assert.match(error.message, /runner-startup-proceed.json: readable, \d+ bytes \(contents withheld\)/);
-					assert.match(error.message, /events.jsonl: readable/);
-					assert.doesNotMatch(error.message, /secret-/);
-					return true;
+			fs.writeFileSync(path.join(asyncDir, "events.jsonl"), JSON.stringify({ type: "subagent.run.started", runId: id, ts: 124, task: "secret-event-output" }) + "\n");
+			const pendingDir = path.join(RESULTS_DIR, "result-pending", "session-1");
+			fs.mkdirSync(pendingDir, { recursive: true });
+			const pendingPath = path.join(pendingDir, `${id}.json`);
+			fs.writeFileSync(pendingPath, JSON.stringify({ id: "secret-other-run", state: "complete", output: "secret-output" }));
+			try {
+				await assert.rejects(waitForAsyncResultFile(id, -1), /Timed out waiting for async result file/);
+				const files = fs.readdirSync(process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR).filter((name) => name.startsWith("async-result-"));
+				assert.equal(files.length, 1);
+				const text = fs.readFileSync(path.join(process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR, files[0]!), "utf-8");
+				assert.ok(Buffer.byteLength(text) <= 32_768);
+				assert.doesNotMatch(text, /secret-/);
+				const evidence = JSON.parse(text);
+				assert.equal(evidence.files.status.runMatches, true);
+				assert.equal(evidence.files.status.startedAt, 123);
+				assert.equal(evidence.files.pending.runMatches, false);
+				assert.equal(evidence.files.proof.state, "pending");
+				assert.equal(evidence.files.proof.runnerMatches, true);
+				assert.equal(evidence.files.public.io, "absent");
+				assert.equal(typeof evidence.files.pending.mtimeMs, "number");
+				assert.equal(evidence.files.stderr.io, "not-file");
+				assert.equal(evidence.files.events.entries[0].ts, 124);
+				assert.equal(fs.existsSync(pendingPath), true, "capture must not promote pending results");
+				fs.writeFileSync(path.join(asyncDir, "status.json"), "secret-oversized".repeat(10_000));
+				// Capture failures must not replace the original test assertion.
+				process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR = path.join(asyncDir, "status.json", "unwritable");
+				const oversized = captureAsyncResultTimeout({ id, asyncDir, resultsDir: RESULTS_DIR, waitStartedAt: 1, deadline: 2,
+					observer: { pid: 7, marks: { resultTimeoutAt: 3 }, events: [{ type: "close", at: 4, code: 0, error: "secret-error" }], phases: [{ phase: "exit-request", ts: 3, pid: 7, output: "secret-output" }] },
 				});
-			};
-			await checkTimeout("pending", 0);
-			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ state: "running", steps: [{ status: "running" }] }));
-			fs.writeFileSync(path.join(mockPi.dir, "call-diagnostic.json"), JSON.stringify({ task: "secret-mock-prompt" }));
-			await checkTimeout("running", 1);
+				assert.equal(oversized.files.status.io, "oversized");
+				assert.equal(oversized.observer?.events[0]?.at, 4);
+				assert.equal(oversized.observer?.phases[0]?.pidMatches, true);
+				assert.doesNotMatch(JSON.stringify(oversized), /secret-/);
+			} finally { fs.rmSync(pendingPath, { force: true }); }
 		} finally {
+			if (previous === undefined) delete process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR;
+			else process.env.PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR = previous;
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 		}
 	});

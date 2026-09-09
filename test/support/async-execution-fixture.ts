@@ -16,6 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createEventBus, createMockPi, createTempDir, makeAgent, removeTempDir, resolveMockPiCallArgs, tryImport } from "./helpers.ts";
 import type { MockPi } from "./helpers.ts";
+import { captureAsyncResultTimeout } from "./async-result-diagnostic.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
 
@@ -334,30 +335,12 @@ function readIfExists(filePath: string): string | undefined {
 
 async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<string> {
 	const resultPath = path.join(RESULTS_DIR, `${id}.json`);
-	const deadline = Date.now() + timeoutMs;
+	const waitStartedAt = Date.now();
+	const deadline = waitStartedAt + timeoutMs;
 	while (!fs.existsSync(resultPath)) {
 		if (Date.now() > deadline) {
 			const asyncDir = path.join(ASYNC_DIR, id);
-			// Summarize before teardown; never print free-form output, prompts or tokens.
-			const evidence = ["status.json", "runner-startup-proceed.json", "process-terminal.json", "events.jsonl", "runner.stdout.log", "runner.stderr.log"].map((name) => {
-				let text: string;
-				try {
-					text = fs.readFileSync(path.join(asyncDir, name), "utf-8");
-				} catch (error) {
-					const code = (error as NodeJS.ErrnoException).code;
-					return `${name}: ${code === "ENOENT" ? "absent" : `unreadable (${code ?? "unknown"})`}`;
-				}
-				if (!text.length) return `${name}: empty`;
-				const size = `${Buffer.byteLength(text)} bytes (contents withheld)`;
-				if (name !== "status.json") return `${name}: readable, ${size}`;
-				try {
-					const status = JSON.parse(text) as AsyncStatusPayload;
-					const knownState = (value: unknown) => ["pending", "running", "complete", "failed", "cancelled"].includes(String(value)) ? value : "other/absent";
-					return `${name}: ${JSON.stringify({ state: knownState(status.state), steps: status.steps?.map((step) => knownState(step.status)), endedAtPresent: typeof status.endedAt === "number" })}`;
-				} catch {
-					return `${name}: invalid status JSON, ${size}`;
-				}
-			});
+			const evidence = captureAsyncResultTimeout({ id, asyncDir, resultsDir: RESULTS_DIR, waitStartedAt, deadline });
 			// The current fixture queue proves prompt entry, not per-run identity or settlement.
 			const queueDir = process.env.MOCK_PI_QUEUE_DIR;
 			let mockEvidence = "mock queue: not configured";
@@ -373,7 +356,7 @@ async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<s
 			assert.fail([
 				`Timed out waiting for async result file: ${resultPath}`,
 				mockEvidence,
-				...evidence,
+				JSON.stringify(evidence),
 			].join("\n"));
 		}
 		await new Promise((resolve) => setTimeout(resolve, 100));

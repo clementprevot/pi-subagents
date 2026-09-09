@@ -35,7 +35,9 @@ jobs:
         if: failure()
         with:
           name: shared-cwd-terminal-${{ matrix.os }}
-          path: ${{ runner.temp }}/1906-terminal-evidence/shared-cwd-terminal.json
+          path: |
+            ${{ runner.temp }}/1906-terminal-evidence/shared-cwd-terminal.json
+            ${{ runner.temp }}/1906-terminal-evidence/async-result-*.json
           if-no-files-found: ignore
 
   bun-workflow-script:

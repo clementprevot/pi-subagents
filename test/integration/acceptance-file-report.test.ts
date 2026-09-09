@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { readProcessTerminal } from "../../src/runs/background/process-terminal.ts";
+import { captureAsyncResultTimeout } from "../support/async-result-diagnostic.ts";
 import { childSessionFactoryModule, setChildSessionFactoryModule } from "../../src/runs/shared/child-session.ts";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, makeAgent, makeAgentConfigs, makeMinimalCtx, tryImport } from "../support/helpers.ts";
@@ -120,8 +121,13 @@ async function waitForAsyncResult(id: string, timeoutMs = 15_000): Promise<Async
 	if (marks) marks.resultWaitStartedAt = Date.now();
 	const resultPath = path.join(RESULTS_DIR!, `${id}.json`);
 	const deadline = Date.now() + timeoutMs;
+	if (marks) marks.resultDeadline = deadline;
 	while (!fs.existsSync(resultPath)) {
-		if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+		if (Date.now() > deadline) {
+			if (marks) marks.resultTimeoutAt = Date.now();
+			ownedRunners.get(id)?.captureResultTimeout("timeout");
+			assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+		}
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 	const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
@@ -330,6 +336,17 @@ public static class AcceptanceIdentity {
 			identity ??= queryIdentity(matched.length === 1 ? matched[0]!.proc : undefined);
 			return { ...snapshot, identity };
 		},
+		captureResultTimeout(phase: "timeout" | "teardown") {
+			// Reuse existing object-correlated observations; do not query processes or add a wait.
+			const matched = processes.filter(({ proc }) => pid !== undefined && proc.pid === pid);
+			const phases = this.readEvidence(path.join(ASYNC_DIR!, id, "runner.stderr.log"), "phases");
+			const evidence = captureAsyncResultTimeout({
+				id, asyncDir: path.join(ASYNC_DIR!, id), resultsDir: RESULTS_DIR!, phase,
+				waitStartedAt: marks.resultWaitStartedAt!, deadline: marks.resultDeadline!,
+				observer: { pid, marks, events: matched.length === 1 ? matched[0]!.events : [], phases: "entries" in phases && Array.isArray(phases.entries) ? phases.entries : [] },
+			});
+			console.log("#async-result-timeout " + JSON.stringify(evidence));
+		},
 		measureControl(proof: unknown) {
 			if (!disableCompileCache) return;
 			try {
@@ -361,12 +378,14 @@ describe("acceptance file reports", { skip: !runSync ? "pi packages not availabl
 			// The reader validates identity/shape and treats absent or partial I/O as unproven.
 			proof = readProcessTerminal(asyncDir, { runId: id });
 			if (proof?.state === "observed") {
+				if (diagnostic.marks.resultTimeoutAt) diagnostic.captureResultTimeout("teardown");
 				diagnostic.measureControl(proof);
 				diagnostic.dispose();
 				return;
 			}
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		} while (Date.now() <= deadline);
+		if (diagnostic.marks.resultTimeoutAt) diagnostic.captureResultTimeout("teardown");
 		let evidence: unknown;
 		try { evidence = diagnostic.snapshot(proof); }
 		catch { evidence = { snapshot: "unavailable" }; }
