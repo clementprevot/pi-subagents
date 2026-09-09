@@ -39,10 +39,12 @@
     "cli"
   ],
   "bin": {
-    "pi-subagents": "install.mjs"
+    "pi-subagents": "install.mjs",
+    "pi-subagents-ssh": "ssh-launch.mjs"
   },
   "files": [
     "index.ts",
+    "ssh-entry.ts",
     "src/**/*.ts",
     "*.mjs",
     "agents/",
