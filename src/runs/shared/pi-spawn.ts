@@ -49,6 +49,7 @@ export interface PiSpawnDeps {
 	platform?: NodeJS.Platform;
 	execPath?: string;
 	argv1?: string;
+	bunVersion?: string;
 	existsSync?: (filePath: string) => boolean;
 	realpathSync?: (filePath: string) => string;
 	readFileSync?: (filePath: string, encoding: "utf-8") => string;
@@ -56,6 +57,15 @@ export interface PiSpawnDeps {
 	resolvePackageEntry?: () => string;
 	piPackageRoot?: string;
 	env?: NodeJS.ProcessEnv;
+}
+
+/** Compiled Pi's entrypoint is virtual; execPath is the real (possibly renamed) image. */
+export function resolveBunPiExecutable(deps: PiSpawnDeps = {}): string | undefined {
+	const bunVersion = deps.bunVersion ?? process.versions.bun;
+	const entry = deps.argv1 ?? process.argv[1];
+	if (!bunVersion || !entry?.startsWith("/$bunfs/")) return undefined;
+	const env = deps.env ?? process.env;
+	return env[PI_SUBAGENT_PI_BINARY_ENV]?.trim() || (deps.execPath ?? process.execPath);
 }
 
 interface PiSpawnCommand {
