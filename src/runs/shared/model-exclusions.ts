@@ -425,16 +425,45 @@ function readProbeClaimSnapshot(claimPath: string): ProbeClaimSnapshot | "unread
 }
 
 function unlinkObservedFile(filePath: string, observed: { raw: string; ino: number; size: number }): boolean {
-	try {
-		const current = fs.statSync(filePath);
-		if (observed.ino !== 0 && current.ino !== observed.ino) return false;
-		if (current.size !== observed.size) return false;
-		if (fs.readFileSync(filePath, "utf-8") !== observed.raw) return false;
-		fs.rmSync(filePath);
-		return true;
-	} catch {
-		return false;
+	const reclaimPath = `${filePath}.reclaim`;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		let reclaimFd: number;
+		try {
+			reclaimFd = fs.openSync(reclaimPath, "wx", 0o600);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt === 1) return false;
+			try {
+				const parsed = JSON.parse(fs.readFileSync(reclaimPath, "utf-8")) as { pid?: unknown };
+				if (typeof parsed.pid === "number" && processIsAlive(parsed.pid)) return false;
+				fs.rmSync(reclaimPath, { force: true });
+				continue;
+			} catch {
+				return false;
+			}
+		}
+		try {
+			fs.writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid }), "utf-8");
+			fs.fsyncSync(reclaimFd);
+		} catch {
+			try { fs.closeSync(reclaimFd); } catch { /* */ }
+			try { fs.rmSync(reclaimPath, { force: true }); } catch { /* */ }
+			return false;
+		}
+		try { fs.closeSync(reclaimFd); } catch { /* */ }
+		try {
+			const current = fs.statSync(filePath);
+			if (observed.ino !== 0 && current.ino !== observed.ino) return false;
+			if (current.size !== observed.size) return false;
+			if (fs.readFileSync(filePath, "utf-8") !== observed.raw) return false;
+			fs.rmSync(filePath);
+			return true;
+		} catch {
+			return false;
+		} finally {
+			try { fs.rmSync(reclaimPath, { force: true }); } catch { /* */ }
+		}
 	}
+	return false;
 }
 
 function tryCreateProbeClaim(claimPath: string, owner: string): boolean {
