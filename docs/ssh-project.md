@@ -2,7 +2,7 @@
 
 Keep Pi, model authentication, configuration and session files on your computer while reading and running commands in a remote POSIX project. The remote host needs OpenSSH access, Bash, `dd`, `base64` and `tr`—not Pi, Node, a service or synchronization software.
 
-This entry is intentionally narrower than ordinary pi-subagents: **fresh, single, native foreground children only**. Related to #2047; that broader SSH execution request stays open for later slices.
+This entry is intentionally narrower than ordinary pi-subagents: **fresh, single, native foreground children only**. Related to #2047; leaves #2047 open.
 
 ## Start a session
 
