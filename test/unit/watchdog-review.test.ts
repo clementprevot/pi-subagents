@@ -196,6 +196,18 @@ describe("main watchdog review adapter", () => {
 		assert.deepEqual(calls.map((call) => call.model.id), ["a", "b"]);
 	});
 
+	it("retries OpenRouter's 401 on the configured cross-provider fallback", async () => {
+		const a = model("openrouter", "a");
+		const b = model("second", "b");
+		const { streamFn, calls } = createStreamFn([
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: '401: {"message":"User not found.","code":401}' }),
+			fauxAssistantMessage("", { stopReason: "stop" }),
+		]);
+		const result = await createMainWatchdogReview(createCtx({ current: a, models: [a, b] }), { streamFn })(request(enabledConfig({ fallbackModels: ["second/b"] }), []));
+		assert.equal(result?.stopReason, "stop");
+		assert.deepEqual(calls.map((call) => call.model), [a, b]);
+	});
+
 	it("does not retry context overflow even when the provider error also says upstream", async () => {
 		const a = model("mock", "a");
 		const b = model("mock", "b");
