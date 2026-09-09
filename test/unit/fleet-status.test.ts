@@ -46,6 +46,60 @@ const theme = {
 };
 
 describe("below-editor subagent FleetView", () => {
+	for (const source of ["workflow", "nested-run", "nested-step"] as const) {
+		it(`advances only running ${source} detail elapsed and freezes terminal evidence`, () => {
+			const cases = [
+				{ status: "running", startedAt: 1_000, durationMs: 0, expected: ["9s", "19s"] },
+				{ status: "complete", startedAt: 1_000, endedAt: 4_000, expected: ["3s", "3s"] },
+				{ status: "failed", startedAt: 1_000, endedAt: 4_000, expected: ["3s", "3s"] },
+				{ status: "stopped", startedAt: 1_000, endedAt: 4_000, expected: ["3s", "3s"] },
+				{ status: "paused", startedAt: 1_000, expected: [undefined, undefined] },
+				{ status: "complete", startedAt: 1_000, expected: [undefined, undefined] },
+				{ status: "pending", startedAt: 1_000, expected: [undefined, undefined] },
+				{ status: "running", expected: [undefined, undefined] },
+				...(source === "workflow" ? [
+					{ status: "complete", durationMs: 2_000, startedAt: 1_000, endedAt: 4_000, expected: ["2s", "2s"] },
+					{ status: "complete", durationMs: 0, expected: ["0s", "0s"] },
+				] as const : []),
+			] as const;
+			const originalNow = Date.now;
+			try {
+				for (const { expected, ...facts } of cases) {
+					Date.now = () => 10_000;
+					const state = stateForTest();
+					const step = { index: 0, agent: "timed-leaf", ...facts };
+					state.asyncJobs.set("owner", {
+						asyncId: "owner", asyncDir: "/tmp/owner", status: "running", startedAt: 1_000,
+						mode: source === "workflow" ? "workflow" : "single",
+						steps: source === "workflow" ? [step] : [{ index: 0, agent: "owner", status: "running" }],
+						...(source !== "workflow" ? { nestedChildren: [{
+							id: "nested", parentRunId: "owner", parentStepIndex: 0, depth: 1, path: [{ runId: "owner", stepIndex: 0 }],
+							...(source === "nested-step" ? { state: "running" as const, mode: "parallel" as const, steps: [step] }
+								: { ...facts, state: facts.status === "pending" ? "queued" as const : facts.status, agent: "timed-leaf" }),
+						}] } : {}),
+					});
+					let widgetFactory: ((tui: unknown, theme: typeof theme) => { render(width: number): string[] }) | undefined;
+					const ctx = { hasUI: true, ui: {
+						setWidget(_key: string, content: typeof widgetFactory) { if (content) widgetFactory = content; },
+						onTerminalInput() { return () => {}; }, getEditorText() { return ""; },
+						requestRender() {}, notify() {}, theme,
+					} } as unknown as ExtensionContext;
+					const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+					try {
+						fleet.setContext(ctx);
+						const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, theme);
+						fleet.handleKey("\x1b[B");
+						for (const [index, now] of [10_000, 20_000].entries()) {
+							Date.now = () => now;
+							const line = component.render(240).find((line) => line.includes("timed-leaf") && /[├└]─/.test(line));
+							assert.ok(line, `${source} ${facts.status} must remain visible`);
+							assert.equal(line.match(/ · (\d+s)(?: ·|$)/)?.[1], expected[index], `${source} ${facts.status} at ${now}`);
+						}
+					} finally { fleet.dispose(); }
+				}
+			} finally { Date.now = originalNow; }
+		});
+	}
 	it("advances quiet workflow bottlenecks while terminal durations stay frozen", () => {
 		const state = stateForTest();
 		state.asyncJobs.set("quiet", {

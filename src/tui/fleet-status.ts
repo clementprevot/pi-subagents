@@ -76,6 +76,7 @@ type FleetNestedRow = {
 	modelThinking?: string;
 	activity?: string;
 	startedAt?: number;
+	endedAt?: number;
 	depth: number;
 	overflow?: number;
 };
@@ -99,6 +100,13 @@ export function resolveFleetViewPlacement(value: unknown): FleetViewPlacement {
 
 export function formatFleetElapsed(ms: number): string {
 	return `${Math.max(0, Math.round(ms / 1000))}s`;
+}
+
+function detailElapsed(row: Pick<AsyncStatusWorkflowRow, "startedAt" | "endedAt" | "durationMs"> & { state: string }): string | undefined {
+	const duration = row.state === "running" && row.startedAt !== undefined
+		? Date.now() - row.startedAt
+		: row.durationMs ?? (row.startedAt !== undefined && row.endedAt !== undefined ? row.endedAt - row.startedAt : undefined);
+	return duration !== undefined ? formatFleetElapsed(duration) : undefined;
 }
 
 export function formatFleetTokens(count: number, window?: number): string {
@@ -221,6 +229,7 @@ function nestedFleetRows(children: NestedRunSummary[] | undefined, visibleLimit:
 						...(modelThinking ? { modelThinking } : {}),
 						...(activity ? { activity } : {}),
 						...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
+						...(step.endedAt !== undefined ? { endedAt: step.endedAt } : {}),
 					});
 					if (!appendRuns(step.children, depth + 1)) {
 						omitted += nestedStepDisplayCount(steps, stepIndex + 1);
@@ -244,6 +253,7 @@ function nestedFleetRows(children: NestedRunSummary[] | undefined, visibleLimit:
 					...(modelThinking ? { modelThinking } : {}),
 					...(activity ? { activity } : {}),
 					...(child.startedAt !== undefined ? { startedAt: child.startedAt } : {}),
+					...(child.endedAt !== undefined ? { endedAt: child.endedAt } : {}),
 				});
 			}
 			if (!appendRuns(child.children, depth + 1)) {
@@ -779,8 +789,8 @@ export class SubagentFleetStatus {
 		const modelThinking = row.modelThinking ? ` (${row.modelThinking})` : "";
 		const activity = row.activity ? ` · ${row.activity}` : "";
 		const left = `${indent}${marker} ${nestedStatusGlyph(row.state, theme)} ${theme.fg(fleetAgentIdentityColor(row.agentIdentity ?? row.name), `${row.name}${modelThinking}`)} · ${row.state}${activity}`;
-		const elapsed = row.startedAt !== undefined ? ` · ${formatFleetElapsed(Date.now() - row.startedAt)}` : "";
-		return truncateToWidth(`${left}${theme.fg("dim", elapsed)}`, width);
+		const elapsed = detailElapsed(row);
+		return truncateToWidth(`${left}${elapsed !== undefined ? theme.fg("dim", ` · ${elapsed}`) : ""}`, width);
 	}
 
 	private workflowRowGlyph(row: AsyncStatusWorkflowRow, theme: Theme): string {
@@ -833,7 +843,7 @@ export class SubagentFleetStatus {
 		].filter((value): value is string => Boolean(value)).join(" · ") : "";
 		const left = `${indent}${marker} ${this.workflowRowGlyph(row, theme)} ${theme.fg("muted", `${kind}${row.name}${context ? ` ${context}` : ""}${modelThinking}`)} · ${this.workflowRowStateLabel(row, theme)}${activity}${hints ? ` · ${hints}` : ""}`;
 		const details = [
-			row.startedAt !== undefined ? formatFleetElapsed(Date.now() - row.startedAt) : undefined,
+			detailElapsed(row),
 			row.tokens !== undefined ? formatFleetTokens(row.tokens, row.window) : undefined,
 			row.provider ? `provider:${row.provider}` : undefined,
 			row.role ? `role:${row.role}` : undefined,
@@ -913,6 +923,8 @@ export class SubagentFleetStatus {
 						row.modelThinking,
 						row.activity,
 						row.startedAt,
+						row.endedAt,
+						row.durationMs,
 						row.tokens,
 						row.provider,
 						row.role,
@@ -931,6 +943,7 @@ export class SubagentFleetStatus {
 						row.modelThinking,
 						row.activity,
 						row.startedAt,
+						row.endedAt,
 						row.depth,
 						row.overflow,
 					]),

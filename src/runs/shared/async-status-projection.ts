@@ -108,6 +108,8 @@ export interface AsyncStatusWorkflowRow {
 	modelThinking?: string;
 	activity?: string;
 	startedAt?: number;
+	endedAt?: number;
+	durationMs?: number;
 	tokens?: number;
 	window?: number;
 	overflow?: number;
@@ -536,6 +538,8 @@ function projectLoadedWorkflowRow(step: AsyncJobStep, index: number, preflight?:
 		...(modelThinking ? { modelThinking } : {}),
 		...(activity ? { activity } : {}),
 		...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
+		...(step.endedAt !== undefined ? { endedAt: step.endedAt } : {}),
+		...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
 		...(step.tokens?.total !== undefined ? { tokens: step.tokens.total } : {}),
 		...(step.tokens?.window !== undefined ? { window: step.tokens.window } : {}),
 		...(preflight ? { preflight } : {}),
