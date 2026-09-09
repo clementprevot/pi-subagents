@@ -5,9 +5,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+if (process.platform !== "linux" || process.arch !== "x64") {
+	console.log(`SKIP npm background smoke: requires Linux x64/bubblewrap; ${process.platform}/${process.arch} not validated.`);
+	process.exit(0);
+}
+
 const npmRoot = process.argv[2];
 const root = process.argv[3];
-assert.equal(process.platform, "linux", "this focused real npm launch check requires bubblewrap");
 assert.ok(npmRoot && path.isAbsolute(npmRoot));
 assert.ok(root && path.isAbsolute(root) && !fs.existsSync(root), "fresh artifact root required");
 const installed = path.join(npmRoot, "extension/node_modules/pi-subagents");

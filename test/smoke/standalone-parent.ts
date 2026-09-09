@@ -44,9 +44,11 @@ export default function registerSmoke(pi: ExtensionAPI) {
 			assert.ok(tool, "the real extension must register its public subagent tool");
 			const mode = process.env.PI_STANDALONE_SMOKE_MODE ?? "single";
 			assert.ok(["single", "workflow", "targeted-controls", "steer", "interrupt", "stop", "child-stop", "child-timeout", "run-timeout", "tool-timeout", "sdk-init-failure", "persistence-failure", "authorization-failure", "missing-bootstrap", "revival", "shared-run", "parallel-stop"].includes(mode), `unimplemented parent smoke mode: ${mode}`);
-			const expectedTools = mode === "tool-timeout" ? ["bash"] : [];
+			const expectedDeclaredTools = mode === "tool-timeout" ? ["bash"] : [];
+			// The default bridge adds upward coordination to nonempty menus, not explicit empty ones.
+			const expectedRuntimeTools = mode === "tool-timeout" ? ["bash", "contact_supervisor"] : [];
 			const profile = parseFrontmatter(fs.readFileSync("/stage/work/.pi/agents/binary-smoke.md", "utf8"));
-			assert.deepEqual(parseFrontmatterList(profile.frontmatter.tools), expectedTools);
+			assert.deepEqual(parseFrontmatterList(profile.frontmatter.tools), expectedDeclaredTools);
 			const workflow = ["workflow", "targeted-controls", "child-timeout"].includes(mode);
 			const expectedState = mode === "interrupt" ? "paused" : mode === "stop" ? "stopped" : mode.endsWith("-timeout") || mode === "child-stop" || mode === "sdk-init-failure" ? "failed" : "complete";
 			const request = mode === "workflow" ? {
@@ -152,7 +154,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 				assert.equal(status.completionOwnerId, parentStatus.completionOwnerId);
 				assert.equal(status.steps[0].model, "standalone-smoke/local");
 				const descriptor = JSON.parse(fs.readFileSync(`${runDir}/recovery-descriptor.json`, "utf8"));
-				assert.deepEqual(descriptor.tools, expectedTools);
+				assert.deepEqual(descriptor.tools, expectedDeclaredTools);
 				const observed = fs.readFileSync("/stage/bootstrap-observer.jsonl", "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.pid === status.pid);
 				assert.deepEqual(observed.map((event) => event.event), mode === "sdk-init-failure" ? ["observer-ready"] : ["observer-ready", "session-start"]);
 				if (mode === "sdk-init-failure") {
@@ -161,7 +163,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 				} else {
 					const starts = lifecycle.filter((entry) => entry.event === "start" && entry.pid === status.pid);
 					assert.equal(starts.length, 1, "outer bootstrap must not start an extra provider session");
-					assert.deepEqual(starts[0].tools, expectedTools);
+					assert.deepEqual(starts[0].tools, expectedRuntimeTools);
 					assert.equal(starts[0].provider, "standalone-smoke");
 					assert.equal(starts[0].model, "local");
 					if (runState === "complete") {
