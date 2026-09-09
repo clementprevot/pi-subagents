@@ -19,6 +19,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Advance live workflow and lane elapsed times from their starts, and nest loaded workflow children in the async widget instead of repeating lane rows and sibling cards. Partial fix for #2085; thanks to [@expoli](https://github.com/expoli).
 - Reject materialized workflow launch groups with invalid worktree repositories or dirty sources before dispatching children or claiming fan-out/output ownership. Allocation still rechecks; workflow-key failure traces may remain. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #2076.
 - Keep the configured main watchdog model and thinking in recommendations instead of suggesting a hardcoded replacement, and clarify user-scope model saves. Thanks to [@freezscholte](https://github.com/freezscholte) for #2078.
 - Recognize OpenRouter's status-prefixed 401 errors for configured model fallback before tool work, including watchdog reviews. Thanks to [@freezscholte](https://github.com/freezscholte) for #2077.
