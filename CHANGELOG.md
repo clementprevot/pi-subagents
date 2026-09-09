@@ -22,9 +22,12 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Reject workflow scripts whose statically provable child launches exceed `maxSubagentSpawnsPerRun` before discovery, artifact creation, or child launch; dynamic launch counts remain advisory and retain runtime enforcement. Thanks to [@ton77v](https://github.com/ton77v) for #2101.
+- Label workflow usage as belonging to child rows instead of showing a misleading zero or overlapping wrapper totals in FleetView; preserve unrelated standalone usage in mixed summaries and distinguish summed concurrent windows from a single context window. Related to #2085; thanks to [@expoli](https://github.com/expoli).
 - Restore background SDK sessions for the official Pi 0.85.1 Linux x64 standalone release, without a separate SDK install; npm runners keep their package-root and lifecycle behavior. Thanks to [@xz-dev](https://github.com/xz-dev) for #2049.
 - Preserve the parent's active theme when foreground children start, while initializing themes in detached runners and refreshing slash-result rendering. Thanks to [@kubahasek](https://github.com/kubahasek) for #2089.
 - Advance live workflow and lane elapsed times from their starts, and nest loaded workflow children in the async widget instead of repeating lane rows and sibling cards. Partial fix for #2085; thanks to [@expoli](https://github.com/expoli).
+- Collapse duplicate async workflow details only when the same inline Fleet roster fully renders the group, including flat materialized native leaf children with fresh identity coverage; retain detail for nested, truncated, or uncertain coverage. Related to #2085; thanks to [@expoli](https://github.com/expoli).
 - Let fanout-authorized child coordinators answer their own children's supervisor requests with explicitly selected `subagent_supervisor`, preserving immediate-parent session ownership and tool restrictions. Keep explicitly requested native coordination tools through host-builtin filtering, and poll only live descendant channels. Thanks to [@shaharmor](https://github.com/shaharmor) for #2087.
 - Allow read-only reviewers to classify findings as quoted "must fix before" categories without treating the labels as implementation instructions; actual required fixes still require mutation tools. Thanks to [@freezscholte](https://github.com/freezscholte) for #2079.
 - Reject materialized workflow launch groups with invalid worktree repositories or dirty sources before dispatching children or claiming fan-out/output ownership. Allocation still rechecks; workflow-key failure traces may remain. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #2076.
@@ -50,6 +53,7 @@
 - Show exact recorded async child IDs in workflow status and actionable child steering guidance when an owned workflow has no foreground route, without treating queued messages as consumed (#2011).
 - Bound transcript previews by individual line size and total rendered body size, preserving recent context and full artifact references. Thanks to [@rtbe](https://github.com/rtbe) for #2015.
 - Await a bounded, offline model registry refresh before opening `/subagents` model and thinking pickers, and warn on refresh failures. Thanks to [@ianbmacdonald](https://github.com/ianbmacdonald) for #2008.
+- Freeze terminal FleetView detail elapsed from recorded duration or end time, omitting unknown durations while running rows keep advancing. Related to #2085 (partial); thanks to [@expoli](https://github.com/expoli).
 
 ## [0.66.0] - 2026-09-06
 

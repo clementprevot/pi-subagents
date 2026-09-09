@@ -46,6 +46,7 @@ type Theme = ExtensionContext["ui"]["theme"];
 
 interface WorkflowWidgetProjection {
 	now: number;
+	inlineFleetCovered?: boolean;
 	children?: AsyncJobState[];
 	materializedKeys?: Set<string>;
 	stages: WorkflowGraphNode[];
@@ -1557,6 +1558,7 @@ function compactWorkflowHeaderLine(job: AsyncJobState, theme: Theme, width?: num
 function compactWorkflowWidgetBodyLines(job: AsyncJobState, theme: Theme, frame: number | undefined, projection: WorkflowWidgetProjection): string[] {
 	const rows = compactWorkflowLaneRows(job, projection.checklist);
 	const lines = [`  ${compactWorkflowStats(job, rows, theme, projection)}`];
+	if (projection.inlineFleetCovered) return [...lines, `  ${theme.fg("dim", "Workflow children shown in Fleet roster")}`];
 	if (rows.length) {
 		for (const row of rows) {
 			if (!projection.materializedKeys?.has(row.key)) lines.push(compactWorkflowLaneLine(row, theme, "  ", frame));
@@ -2436,7 +2438,7 @@ function foregroundStyleWidgetDetails(job: AsyncJobState, theme: Theme, expanded
 }
 
 function buildSingleWidgetLines(job: AsyncJobState, theme: Theme, width: number, expanded: boolean, frame?: number, projection = buildWorkflowWidgetProjection(job)): string[] {
-	if (!expanded && job.mode === "workflow") return [compactWorkflowHeaderLine(job, theme, width), ...compactWorkflowWidgetBodyLines(job, theme, frame, projection)].map((line) => truncLine(line, width));
+	if ((!expanded || projection.inlineFleetCovered) && job.mode === "workflow") return [compactWorkflowHeaderLine(job, theme, width), ...compactWorkflowWidgetBodyLines(job, theme, frame, projection)].map((line) => truncLine(line, width));
 	const stats = widgetStats(job, theme, projection, !expanded);
 	const count = job.mode === "workflow"
 		? projection.checklist?.total ?? projection.stageProgress?.total ?? job.stepsTotal ?? job.agents?.length ?? job.steps?.length
@@ -2744,6 +2746,26 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], buildLines: () => string[
 }
 
 const asyncWidgetUpdates = new WeakMap<ExtensionContext["ui"], (jobs: AsyncJobState[]) => void>();
+const inlineWorkflowCoverage = new WeakMap<ExtensionContext["ui"], ReadonlyMap<string, string>>();
+const asyncWidgetInvalidations = new WeakMap<ExtensionContext["ui"], () => void>();
+
+/** Include child identity and freshness in the roster's existing snapshot. */
+export function inlineWorkflowRenderKey(job: AsyncJobState, children: AsyncJobState[]): string {
+	if (!children.length) return widgetRenderKey(job);
+	return JSON.stringify([widgetRenderKey(job), children.map((child) => [
+		child.asyncId, widgetRenderKey(child, true), child.context,
+		child.steps?.map((step) => [Boolean(step.runner), step.tokens?.window]), Boolean(child.workflowGraph),
+	])]);
+}
+
+/** Presentation-only coverage from the mounted inline Fleet roster, never configuration. */
+export function setInlineWorkflowCoverage(ui: ExtensionContext["ui"], coverage: ReadonlyMap<string, string>): void {
+	const previous = inlineWorkflowCoverage.get(ui);
+	if ((previous?.size ?? 0) === coverage.size && [...coverage].every(([id, key]) => previous?.get(id) === key)) return;
+	if (coverage.size) inlineWorkflowCoverage.set(ui, coverage);
+	else inlineWorkflowCoverage.delete(ui);
+	asyncWidgetInvalidations.get(ui)?.();
+}
 
 /** Attach only to loaded workflow parents; orphan jobs remain top-level. */
 function widgetJobTree(jobs: AsyncJobState[], now: number): { roots: AsyncJobState[]; projectionFor: WorkflowWidgetProjectionLookup } {
@@ -2770,8 +2792,8 @@ function widgetChecklistWithoutMaterializedChildren(projection: WorkflowWidgetPr
 }
 
 function materializedWidgetChildLines(job: AsyncJobState, theme: Theme, width: number, expanded: boolean, frame: number | undefined, projectionFor: WorkflowWidgetProjectionLookup): string[] {
-	const children = projectionFor(job).children;
-	if (!children?.length) return [];
+	const { children, inlineFleetCovered } = projectionFor(job);
+	if (inlineFleetCovered || !children?.length) return [];
 	const lines: string[] = [];
 	const shown = orderedWidgetJobs(children).slice(0, MAX_WIDGET_JOBS);
 	for (const [index, child] of shown.entries()) {
@@ -2794,6 +2816,13 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 		let cachedFrame: number | undefined;
 		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
+		let cachedCoverage = "[]";
+		const invalidate = (): void => {
+			cachedLines = undefined;
+			resetWidgetLayoutSession();
+			tui.requestRender();
+		};
+		asyncWidgetInvalidations.set(ui, invalidate);
 		const update = (nextJobs: AsyncJobState[]): void => {
 			jobs = nextJobs;
 			cachedLines = undefined;
@@ -2803,15 +2832,38 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 		const component = Object.assign(container, {
 			dispose(): void {
 				if (asyncWidgetUpdates.get(ui) === update) asyncWidgetUpdates.delete(ui);
+				if (asyncWidgetInvalidations.get(ui) === invalidate) asyncWidgetInvalidations.delete(ui);
 			},
 		});
 		container.render = (renderWidth: number): string[] => {
 			const now = Date.now();
 			const frame = Math.floor(now / WIDGET_ANIMATION_INTERVAL_MS);
 			const expanded = ui.getToolsExpanded?.() ?? false;
-			if (cachedLines && cachedRenderWidth === renderWidth && cachedFrame === frame && cachedExpanded === expanded) return cachedLines;
+			const coverage = inlineWorkflowCoverage.get(ui);
+			const covered = new Set<string>();
+			if (coverage?.size) {
+				const childrenByParent = new Map<string, AsyncJobState[]>();
+				for (const child of jobs) {
+					if (!child.parentWorkflowRunId) continue;
+					const children = childrenByParent.get(child.parentWorkflowRunId) ?? [];
+					children.push(child);
+					childrenByParent.set(child.parentWorkflowRunId, children);
+				}
+				for (const job of jobs) {
+					const snapshot = coverage.get(job.asyncId);
+					if (snapshot === undefined) continue;
+					const children = childrenByParent.get(job.asyncId) ?? [];
+					if (!children.some((child) => childrenByParent.has(child.asyncId))
+						&& snapshot === inlineWorkflowRenderKey(job, children)) covered.add(job.asyncId);
+				}
+			}
+			const coverageKey = JSON.stringify([...covered]);
+			if (cachedLines && cachedRenderWidth === renderWidth && cachedFrame === frame && cachedExpanded === expanded && cachedCoverage === coverageKey) return cachedLines;
+			if (cachedCoverage !== coverageKey) resetWidgetLayoutSession();
+			cachedCoverage = coverageKey;
 			const width = Math.max(0, renderWidth - 2);
 			const { roots, projectionFor } = widgetJobTree(jobs, now);
+			for (const job of roots) projectionFor(job).inlineFleetCovered = covered.has(job.asyncId);
 			const buildLines = (): string[] => expanded
 				? buildWidgetLinesWithProjection(roots, theme, width, true, frame, projectionFor)
 				: roots.length === 1 && !projectionFor(roots[0]!).children?.length
@@ -2849,7 +2901,7 @@ function buildWidgetLinesWithProjection(jobs: AsyncJobState[], theme: Theme, wid
 	let slots = MAX_WIDGET_JOBS;
 	const appendJob = (job: AsyncJobState): void => {
 		const projection = projectionFor(job);
-		const compactWorkflow = !expanded && job.mode === "workflow";
+		const compactWorkflow = (!expanded || projection.inlineFleetCovered) && job.mode === "workflow";
 		const stats = compactWorkflow ? "" : widgetStats(job, theme, projection, !expanded);
 		const details = compactWorkflow
 			? [

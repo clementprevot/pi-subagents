@@ -14,6 +14,7 @@ import { channel } from "node:diagnostics_channel";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { asyncResultTimeoutEvidence } from "./async-result-timeout-evidence.ts";
 import { createEventBus, createMockPi, createTempDir, makeAgent, removeTempDir, resolveMockPiCallArgs, tryImport } from "./helpers.ts";
 import type { MockPi } from "./helpers.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
@@ -339,25 +340,7 @@ async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<s
 		if (Date.now() > deadline) {
 			const asyncDir = path.join(ASYNC_DIR, id);
 			// Summarize before teardown; never print free-form output, prompts or tokens.
-			const evidence = ["status.json", "runner-startup-proceed.json", "process-terminal.json", "events.jsonl", "runner.stdout.log", "runner.stderr.log"].map((name) => {
-				let text: string;
-				try {
-					text = fs.readFileSync(path.join(asyncDir, name), "utf-8");
-				} catch (error) {
-					const code = (error as NodeJS.ErrnoException).code;
-					return `${name}: ${code === "ENOENT" ? "absent" : `unreadable (${code ?? "unknown"})`}`;
-				}
-				if (!text.length) return `${name}: empty`;
-				const size = `${Buffer.byteLength(text)} bytes (contents withheld)`;
-				if (name !== "status.json") return `${name}: readable, ${size}`;
-				try {
-					const status = JSON.parse(text) as AsyncStatusPayload;
-					const knownState = (value: unknown) => ["pending", "running", "complete", "failed", "cancelled"].includes(String(value)) ? value : "other/absent";
-					return `${name}: ${JSON.stringify({ state: knownState(status.state), steps: status.steps?.map((step) => knownState(step.status)), endedAtPresent: typeof status.endedAt === "number" })}`;
-				} catch {
-					return `${name}: invalid status JSON, ${size}`;
-				}
-			});
+			const evidence = asyncResultTimeoutEvidence(asyncDir, id);
 			// The current fixture queue proves prompt entry, not per-run identity or settlement.
 			const queueDir = process.env.MOCK_PI_QUEUE_DIR;
 			let mockEvidence = "mock queue: not configured";

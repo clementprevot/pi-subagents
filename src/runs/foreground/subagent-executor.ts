@@ -4922,7 +4922,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (requestParams.action?.trim() === "validate") {
-				const validation = validateWorkflowScript(requestParams.workflowScript ?? "");
+				const validation = validateWorkflowScript(requestParams.workflowScript ?? "", {
+					maxSubagentSpawnsPerRun: requestParams.maxSubagentSpawnsPerRun ?? resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun),
+				});
 				const invalidValidation = { ...validation, ok: false, errors: [...validation.errors, { message }] };
 				return {
 					content: [{ type: "text", text: JSON.stringify(invalidValidation) }],
@@ -4933,7 +4935,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return buildRequestedModeError(requestParams, message);
 		}
 		if (requestParams.action?.trim() === "validate") {
-			const validation = validateWorkflowScript(requestParams.workflowScript ?? "");
+			const validation = validateWorkflowScript(requestParams.workflowScript ?? "", {
+				maxSubagentSpawnsPerRun: requestParams.maxSubagentSpawnsPerRun ?? resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun),
+			});
 			const payload = workflowPreflight ? { ...validation, preflight: workflowPreflight } : validation;
 			return {
 				content: [{ type: "text", text: JSON.stringify(payload) }],
@@ -4951,6 +4955,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			workflowResource = { permit: workflowResourcePermit, ...consumed };
 		}
 		if (requestParams.workflowScript !== undefined && normalizedAction === undefined) {
+			const spawnBudgetValidation = validateWorkflowScript(requestParams.workflowScript, {
+				maxSubagentSpawnsPerRun: requestParams.maxSubagentSpawnsPerRun ?? resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun),
+			});
+			const spawnBudgetErrors = spawnBudgetValidation.errors.filter((error) => error.kind === "spawn-budget");
+			if (spawnBudgetErrors.length > 0) {
+				return buildRequestedModeError(requestParams, `workflowScript validation failed before child launch; no children launched. ${spawnBudgetErrors.map((error) => error.message).join(" ")}`);
+			}
+			for (const warning of spawnBudgetValidation.warnings ?? []) console.warn(`[pi-subagents] ${warning.message}`);
 			const acceptanceErrors = validateAcceptanceInput(requestParams.acceptance);
 			if (acceptanceErrors.length > 0) return buildRequestedModeError(requestParams, acceptanceErrors.join(" "));
 			const foregroundWorkflowRunId = encodeIndexSegment(_id);
