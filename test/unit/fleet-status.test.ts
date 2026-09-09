@@ -47,7 +47,7 @@ const theme = {
 };
 
 const colorTheme = {
-	fg: (name: string, text: string) => `\x1b[${name}m${text}\x1b[0m`,
+	fg: (name: string, text: string) => `⟦${name}⟧${text}⟦/⟧`,
 	bg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
 };
@@ -55,12 +55,12 @@ const colorTheme = {
 const FLEET_STATUS_SEMANTIC_COLORS = new Set(["accent", "success", "error", "warning", "muted", "dim"]);
 
 function visibleText(value: string): string {
-	return value.replace(/\x1b\[[^\x1b]*m/g, "");
+	return value.replace(/\x1b\[[^\x1b]*m/g, "").replace(/⟦\/?⟧|⟦\w+⟧/g, "");
 }
 
 function colorNameAround(line: string | undefined, label: string): string | undefined {
 	if (!line) return undefined;
-	return line.match(new RegExp(`\\x1b\\[(\\w+)m${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))?.[1];
+	return line.match(new RegExp(`⟦(\\w+)⟧${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))?.[1];
 }
 
 describe("below-editor subagent FleetView", () => {
@@ -277,7 +277,7 @@ describe("below-editor subagent FleetView", () => {
 			fleet.setContext(ctx);
 			const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, colorTheme);
 			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
-			const lines = component.render(100);
+			const lines = component.render(160);
 			const colorFor = (label: string) => colorNameAround(lines.find((line) => visibleText(line).includes(label)), label);
 			assert.equal(colorFor("Find seams (scout)"), fleetAgentIdentityColor("scout"));
 			assert.equal(colorFor("Audit API (scout)"), fleetAgentIdentityColor("scout"));
@@ -329,7 +329,7 @@ describe("below-editor subagent FleetView", () => {
 			fleet.setContext(ctx);
 			const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, colorTheme);
 			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
-			const lines = component.render(120);
+			const lines = component.render(160);
 			const nested = lines.find((line) => visibleText(line).includes("nested-reviewer (fable-5 · thinking low)"));
 			assert.ok(nested);
 			assert.equal(colorNameAround(nested, "nested-reviewer (fable-5 · thinking low)"), fleetAgentIdentityColor("nested-reviewer"));
