@@ -88,7 +88,9 @@ One model setting serves both boundary and cadence reviews per endpoint. Use a s
 /subagents-watchdog on
 ```
 
-The recommendation is Opus 4.8 or GPT 5.5 at thinking high, whichever your main session is not using and is authenticated. Saving a model does not enable the watchdog; use `on` separately.
+When a main watchdog model is configured (including a session override), recommendations keep that model and its effective thinking level rather than judging its strength or independence. An unavailable or unauthenticated configured model is reported, not replaced. Without a configured main model, the recommendation remains Opus 4.8 or GPT 5.5 at thinking high, whichever your main session is not using and is authenticated.
+
+`session model recommended` changes only this session. `model recommended` explicitly saves the recommendation to **user settings**, affecting other projects without overrides; it does not change project settings. Project and session overrides still take precedence. Use an explicit model to replace a configured choice. Saving a model does not enable the watchdog; use `on` separately.
 
 ```json
 {
