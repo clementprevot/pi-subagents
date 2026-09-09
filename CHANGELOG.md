@@ -12,6 +12,7 @@
 - Notify the parent as individual async workflow children finish, without waiting for all siblings (#2027). Each child completion delivers a compact notification with the workflow run ID, child key, exact child run ID, outcome, and output reference while the workflow remains running.
 
 ### Changed
+- Report host-pruned child tools in existing launch warnings, including the agent, requested/effective tool names, and active ceiling sources when known, without changing launch outcomes. Diagnostic follow-up for #2058; thanks to [@nicobailon](https://github.com/nicobailon).
 - Consolidate model-facing subagent prose while retaining the flat typed execution/control API; keep extended recipes in the existing on-demand guides. Thanks to [@Whamp](https://github.com/Whamp) for the prompt-footprint measurements and proposal in #2048.
 - Color FleetView agent labels by stable agent identity so multi-agent runs are easier to scan. Thanks to [@savinofiore](https://github.com/savinofiore) for #2056.
 - Forked children keep their requested thinking level after signed Anthropic thinking blocks are stripped from the inherited transcript; fork context no longer forces thinking off for Anthropic-backed children. Requires a Pi host on 0.85.0 or newer, which recovers from signed-thinking mismatches on the transport. Thanks to [@hank-warren](https://github.com/hank-warren) for #2021.
@@ -20,7 +21,8 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
-- Freeze terminal FleetView detail elapsed from recorded duration or end time, omitting unknown durations while running rows keep advancing. Related to #2085 (partial); thanks to [@expoli](https://github.com/expoli).
+- Restore background SDK sessions for the official Pi 0.85.1 Linux x64 standalone release, without a separate SDK install; npm runners keep their package-root and lifecycle behavior. Thanks to [@xz-dev](https://github.com/xz-dev) for #2049.
+- Preserve the parent's active theme when foreground children start, while initializing themes in detached runners and refreshing slash-result rendering. Thanks to [@kubahasek](https://github.com/kubahasek) for #2089.
 - Advance live workflow and lane elapsed times from their starts, and nest loaded workflow children in the async widget instead of repeating lane rows and sibling cards. Partial fix for #2085; thanks to [@expoli](https://github.com/expoli).
 - Let fanout-authorized child coordinators answer their own children's supervisor requests with explicitly selected `subagent_supervisor`, preserving immediate-parent session ownership and tool restrictions. Keep explicitly requested native coordination tools through host-builtin filtering, and poll only live descendant channels. Thanks to [@shaharmor](https://github.com/shaharmor) for #2087.
 - Allow read-only reviewers to classify findings as quoted "must fix before" categories without treating the labels as implementation instructions; actual required fixes still require mutation tools. Thanks to [@freezscholte](https://github.com/freezscholte) for #2079.
@@ -47,6 +49,7 @@
 - Show exact recorded async child IDs in workflow status and actionable child steering guidance when an owned workflow has no foreground route, without treating queued messages as consumed (#2011).
 - Bound transcript previews by individual line size and total rendered body size, preserving recent context and full artifact references. Thanks to [@rtbe](https://github.com/rtbe) for #2015.
 - Await a bounded, offline model registry refresh before opening `/subagents` model and thinking pickers, and warn on refresh failures. Thanks to [@ianbmacdonald](https://github.com/ianbmacdonald) for #2008.
+- Freeze terminal FleetView detail elapsed from recorded duration or end time, omitting unknown durations while running rows keep advancing. Related to #2085 (partial); thanks to [@expoli](https://github.com/expoli).
 
 ## [0.66.0] - 2026-09-06
 

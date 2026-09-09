@@ -20,7 +20,7 @@ import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchd
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
-import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
+import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { resolveNodeExecutable } from "../../shared/node-executable.ts";
@@ -542,15 +542,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 	const cwdError = preflightLaunchCwd(requestedCwd, cwd);
 	if (cwdError) return { error: cwdError };
 
-	if (!jitiCliPath) {
+	// The compiled host exposes its SDK only through Pi's extension loader.
+	const binaryHost = resolveBunPiExecutable();
+	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
+	const bootstrap = path.join(path.dirname(runner), "binary-bootstrap.ts");
+	if (binaryHost && !fs.existsSync(bootstrap)) return { error: `Background runner bootstrap not found: ${bootstrap}` };
+	if (!binaryHost && !jitiCliPath) {
 		return { error: "upstream jiti for TypeScript execution could not be found; ensure package dependencies are installed" };
 	}
-	if (!piPackageRoot) {
-		return { error: `Background children require pi installed as the npm package (${PI_CODING_AGENT_PACKAGE}); a standalone pi binary has no package directory, so the async runner cannot create child sessions. Run this child in the foreground (async: false) or install pi from npm.` };
+	if (!binaryHost && !piPackageRoot) {
+		return { error: `Background children require a supported standalone Pi host or the installed npm package (${PI_CODING_AGENT_PACKAGE}); neither is available.` };
 	}
-	const hostPeerAliases = resolveHostPeerAliases(piPackageRoot);
+	const hostPeerAliases = !binaryHost && piPackageRoot ? resolveHostPeerAliases(piPackageRoot) : { aliases: {}, missing: [] };
 	if (hostPeerAliases.missing.length > 0) {
-		return { error: `Background children require pi installed as the npm package (${PI_CODING_AGENT_PACKAGE}) with its dependencies; ${piPackageRoot} does not provide ${hostPeerAliases.missing.join(", ")}, so the async runner cannot create child sessions. A standalone pi binary cannot run background children.` };
+		return { error: `Background children require the host npm package (${PI_CODING_AGENT_PACKAGE}) with its dependencies; ${piPackageRoot} does not provide ${hostPeerAliases.missing.join(", ")}.` };
 	}
 
 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
@@ -560,8 +565,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 	const launchBarrierToken = hasRevivalLease ? undefined : runnerProcessInstanceId;
 	const launchConfig = { ...cfg, runnerProcessInstanceId, ...(launchBarrierToken ? { launchBarrierToken } : {}) };
 	writePrivateAtomicJson(cfgPath, launchConfig);
-	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
-	const nodeCommand = resolveNodeExecutable();
+	const command = binaryHost ?? resolveNodeExecutable();
 	const launchForStartup = launchConfig as typeof launchConfig & { asyncDir?: unknown; id?: unknown; sessionId?: unknown; completionOwnerId?: unknown; revivalLease?: unknown };
 	const launchAsyncDir = typeof launchForStartup.asyncDir === "string" ? launchForStartup.asyncDir : undefined;
 	const launchRunId = typeof launchForStartup.id === "string" ? launchForStartup.id : suffix;
@@ -590,15 +594,20 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 		const preload = Object.keys(hostPeerAliases.aliases).length > 0
 			? ["--import", new URL("../../../runner-peer-preload.mjs", import.meta.url).href]
 			: [];
-		const proc = spawn(nodeCommand, [...preload, jitiCliPath, runner, cfgPath], {
+		const args = binaryHost
+			? ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-session", "--mode", "rpc", "--extension", bootstrap]
+			: [...preload, jitiCliPath!, runner, cfgPath];
+		const proc = spawn(command, args, {
 			cwd,
 			...backgroundProcessOptions(),
 			stdio: ["ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
 			env: {
 				...omitExtensionBindingsEnv(process.env),
-				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot,
-				PI_PACKAGE_DIR: piPackageRoot,
-				[JITI_ALIAS_ENV]: JSON.stringify(hostPeerAliases.aliases),
+				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: binaryHost ? undefined : piPackageRoot,
+				// npm must override inherited bundled layouts (#2071); binaries retain release assets.
+				PI_PACKAGE_DIR: binaryHost ? process.env.PI_PACKAGE_DIR : piPackageRoot,
+				[JITI_ALIAS_ENV]: binaryHost ? undefined : JSON.stringify(hostPeerAliases.aliases),
+				PI_SUBAGENT_RUNNER_CONFIG: binaryHost ? cfgPath : undefined,
 			},
 		});
 		closeFd(stdoutFd);

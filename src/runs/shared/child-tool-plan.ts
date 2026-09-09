@@ -158,7 +158,7 @@ export interface ResolvePiLaunchToolPlanInput {
 	/**
 	 * When provided, child tool plans intersect declared builtin tools with
 	 * this set. Tools the agent declares but the host does not provide are
-	 * silently omitted (tracked in `unavailableHostBuiltins`), and agents
+	 * omitted with a non-fatal warning (tracked in `unavailableHostBuiltins`), and agents
 	 * that require unavailable tools fail closed with an explicit error.
 	 */
 	hostAvailableBuiltins?: readonly string[];
@@ -494,6 +494,19 @@ export function resolvePiLaunchToolPlan(
 					]),
 				]
 			: undefined;
+	// Host pruning also happens without a ceiling (and therefore without an
+	// audit). Use the existing non-fatal launch warnings rather than inventing
+	// a ceiling or treating the requested allowlist as a minimum requirement.
+	if (unavailableHostBuiltins.length > 0) {
+		const subject = input.agentName ? `Agent '${input.agentName}'` : "Subagent";
+		warnings.push(
+			`${subject}: host runtime tool availability omitted [${unavailableHostBuiltins.join(", ")}]. `
+				+ `Requested tool names: ${requestedToolNames ? `[${requestedToolNames.join(", ")}]` : "not explicitly specified"}; effective tool allowlist: [${effectiveToolAllowlist.join(", ")}]. `
+				+ (capabilityCeiling ? `Active capability ceiling sources: [${capabilityCeiling.sources.join(", ") || "unknown source"}]. ` : "")
+				+ (excludeTools.length > 0 ? `Explicit excludeTools: [${excludeTools.join(", ")}]. ` : "")
+				+ "This is a non-fatal tool-plan diagnostic, not verification of the child's runtime tool menu.",
+		);
+	}
 	const capabilityAudit = capabilityCeiling
 		? ({
 				ceiling: capabilityCeiling,
