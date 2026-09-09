@@ -516,7 +516,6 @@ function sameRecordedExclusion(left: Readonly<ModelExclusion>, right: Readonly<M
 	return left.provider === right.provider
 		&& left.modelId === right.modelId
 		&& left.recordedAt === right.recordedAt
-		&& left.expiresAt === right.expiresAt
 		&& left.reason === right.reason;
 }
 

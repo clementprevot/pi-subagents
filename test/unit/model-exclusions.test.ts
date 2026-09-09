@@ -169,6 +169,20 @@ describe("model exclusions — transient recovery probes", () => {
 		assert.equal(findModelExclusion("openai/gpt-4")?.modelId, "gpt-4");
 	});
 
+	it("clears a recovered exclusion after an in-memory TTL shorten", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable", ttlMs: 60_000 });
+		const persisted = JSON.parse(fs.readFileSync(getExclusionsFilePath(), "utf-8")).exclusions[0] as ModelExclusion;
+		setDefaultTTL(30_000, { shortenExisting: true });
+		assert.equal(JSON.parse(fs.readFileSync(getExclusionsFilePath(), "utf-8")).exclusions[0].expiresAt, persisted.expiresAt);
+		assert.ok((findModelExclusion("openai/gpt-4")?.expiresAt ?? 0) < persisted.expiresAt);
+		const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
+		assert.equal(claim.status, "claimed");
+		releaseTransientModelRecoveryProbe(claim, true);
+		assert.equal(findModelExclusion("openai/gpt-4"), undefined);
+		reloadFromDisk();
+		assert.equal(findModelExclusion("openai/gpt-4"), undefined);
+	});
+
 	it("reclaims a dead-pid claim and never steals a live process even after expiry", () => {
 		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
 		const candidate = "openai/gpt-4";
