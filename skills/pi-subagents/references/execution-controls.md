@@ -340,7 +340,7 @@ subagent({ action: "steer", id: "abc123", mode: "follow_up", message: "After thi
 subagent({ action: "steer", id: "abc123", mode: "auto", message: "Switch to the failing test now." })
 ```
 
-Direct input acceptance returns `delivered`, not proof of model compliance. A live follow-up acknowledgment reports `queued`, meaning Pi accepted it into its follow-up queue, not that it was delivered. The runtime does not provide a later correlated live queued-to-delivered receipt.
+For async runs, `delivered` records that the child consumed the correlated user input; foreground `delivered` records in-process transport acceptance. Neither is proof of model compliance. A live foreground follow-up acknowledgment reports `queued`, meaning Pi accepted it into its follow-up queue, not that it was delivered. The foreground transport does not provide a later correlated queued-to-delivered receipt.
 
 ## Watchdog
 

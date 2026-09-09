@@ -389,8 +389,13 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 				boundaryOpen = true;
 				markScriptedFinal();
 				if (response.holdQueuedMessagesUntilAbort) {
-					if (queued.length === 0 && !record.aborted) await waitForQueuedMessage();
-					if (!record.aborted) await abortedPromise;
+					const keepAlive = setInterval(() => {}, 1_000);
+					try {
+						if (queued.length === 0 && !record.aborted) await waitForQueuedMessage();
+						if (!record.aborted) await abortedPromise;
+					} finally {
+						clearInterval(keepAlive);
+					}
 					return;
 				}
 				const keepAliveMs = typeof response.keepAliveAfterFinalMessageMs === "number" && response.keepAliveAfterFinalMessageMs > 0
