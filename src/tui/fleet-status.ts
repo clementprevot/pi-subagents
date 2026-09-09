@@ -8,6 +8,7 @@ import { contextModeLabel } from "../runs/shared/context-mode.ts";
 import { formatWorkflowJsonPreview } from "../workflows/scripted-workflow.ts";
 import { hostStepReportName, hostStepVerdictLabel } from "../runs/shared/host-step-status.ts";
 import { isStaleExtensionContextError } from "../shared/extension-context.ts";
+import { widgetRenderKey } from "./render.ts";
 import { formatWorkflowChecklistBottleneck, formatWorkflowChecklistPhase, formatWorkflowChecklistSummary, projectWorkflowChecklist, type WorkflowChecklistPhase, type WorkflowChecklistProjection } from "../workflows/workflow-checklist.ts";
 
 export const FLEET_STATUS_WIDGET_KEY = "subagent-fleet-status";
@@ -91,6 +92,7 @@ export interface FleetStatusOptions {
 	refreshMs?: number;
 	maxAgentRows?: number;
 	placement?: FleetViewPlacement;
+	onWorkflowCoverageChange?: (ui: ExtensionContext["ui"], coverage: ReadonlyMap<string, string>) => void;
 }
 
 export function resolveFleetViewPlacement(value: unknown): FleetViewPlacement {
@@ -527,6 +529,8 @@ export class SubagentFleetStatus {
 	private inspectorOpen = false;
 	private lastRenderKey = "";
 	private entries: FleetStatusEntry[] = [];
+	private workflowSnapshots = new Map<string, string>();
+	private readonly onWorkflowCoverageChange: FleetStatusOptions["onWorkflowCoverageChange"];
 	private readonly state: SubagentState;
 	private readonly openInspector: (itemKey: string) => Promise<void> | void;
 	private readonly refreshMs: number;
@@ -543,10 +547,14 @@ export class SubagentFleetStatus {
 		this.refreshMs = options.refreshMs ?? REFRESH_MS;
 		this.maxAgentRows = options.maxAgentRows ?? MAX_AGENT_ROWS;
 		this.placement = options.placement ?? "belowEditor";
+		this.onWorkflowCoverageChange = options.onWorkflowCoverageChange;
 	}
 
 	setContext(ctx: ExtensionContext): void {
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI) {
+			this.clearUiRegistration();
+			return;
+		}
 		const ui = ctx.ui;
 		if (this.ui === ui) {
 			this.ctx = ctx;
@@ -583,6 +591,19 @@ export class SubagentFleetStatus {
 			return;
 		}
 		this.entries = collectFleetStatusEntries(this.state);
+		this.workflowSnapshots.clear();
+		if (this.active && this.onWorkflowCoverageChange) {
+			const parents = new Set([...this.state.asyncJobs.values()].map((job) => job.parentWorkflowRunId));
+			const attachedOwners = new Set(this.entries.map((entry) => entry.parentKey));
+			for (const job of this.state.asyncJobs.values()) {
+				// Fleet does not expand attached workflow wrappers or step descendants.
+				// Unknown/unsupported coverage deliberately retains the async tree.
+				if (job.mode !== "workflow" || !isActiveState(job.status) || job.parentWorkflowRunId || parents.has(job.asyncId)
+					|| job.nestedChildren?.length || job.steps?.some((step) => step.children?.length)
+					|| attachedOwners.has(`async:${job.asyncId}`)) continue;
+				this.workflowSnapshots.set(`async:${job.asyncId}`, widgetRenderKey(job));
+			}
+		}
 		this.clampSelection();
 		if (this.inspectorOpen || this.state.fleetInspectorOpen) {
 			this.lastRenderKey = "";
@@ -598,6 +619,7 @@ export class SubagentFleetStatus {
 		}
 
 		const renderKey = this.getRenderKey();
+		if (!this.active || renderKey !== this.lastRenderKey) this.clearWorkflowCoverage();
 		if (!this.widgetRegistered) {
 			ctx.ui.setWidget(FLEET_STATUS_WIDGET_KEY, (tui, theme) => {
 				this.tui = tui;
@@ -608,6 +630,7 @@ export class SubagentFleetStatus {
 					},
 					dispose: () => {
 						if (this.tui !== tui) return;
+						this.clearWorkflowCoverage();
 						this.widgetRegistered = false;
 						this.tui = undefined;
 					},
@@ -689,8 +712,12 @@ export class SubagentFleetStatus {
 	}
 
 	render(width: number, theme: Theme): string[] {
-		if (!this.hasInlineSurface()) return [];
+		if (!this.hasInlineSurface() || this.state.widgetsSuspended || this.inspectorOpen || this.state.fleetInspectorOpen) {
+			this.clearWorkflowCoverage();
+			return [];
+		}
 		if (!this.active) {
+			this.clearWorkflowCoverage();
 			const workEntries = this.entries.filter((entry) => !entry.surface);
 			const projectEntries = this.entries.filter((entry) => entry.surface === "project-pane");
 			const tokens = workEntries.reduce((total, entry) => total + entry.tokens, 0);
@@ -741,6 +768,23 @@ export class SubagentFleetStatus {
 			}
 		}
 		if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
+		if (this.ui && this.widgetRegistered && this.onWorkflowCoverageChange) {
+			const coverage = new Map<string, string>();
+			for (const [key, snapshot] of this.workflowSnapshots) {
+				const ownerIndex = tree.findIndex((row) => row.kind === "owner" && row.entry.key === key);
+				const owner = tree[ownerIndex];
+				if (owner?.kind !== "owner" || ownerIndex < start) continue;
+				const count = (owner.entry.workflowRows?.length ?? 0) + (owner.entry.workflowChecklist?.phases.length ?? 0);
+				if (!count || ownerIndex + count >= start + visibleCount) continue;
+				const descendants = tree.slice(ownerIndex + 1, ownerIndex + count + 1);
+				if (!descendants.every((row) => (row.kind === "workflow" && row.ownerKey === key && !row.row.overflow
+					&& visibleWidth(this.renderWorkflowRow(row.row, row.last, Infinity, theme)) <= width)
+					|| (row.kind === "workflow-phase" && row.ownerKey === key
+						&& visibleWidth(this.renderWorkflowPhaseRow(row.phase, row.last, Infinity, theme)) <= width))) continue;
+				coverage.set(key.slice("async:".length), snapshot);
+			}
+			this.onWorkflowCoverageChange(this.ui, coverage);
+		}
 		this.renderProjectPaneSection(lines, selectedIndex, width, theme, rosterIndexByKey);
 		return lines;
 	}
@@ -956,6 +1000,7 @@ export class SubagentFleetStatus {
 	}
 
 	private clearWidget(): void {
+		this.clearWorkflowCoverage();
 		if (!this.widgetRegistered) return;
 		try {
 			this.ui?.setWidget(FLEET_STATUS_WIDGET_KEY, undefined);
@@ -969,6 +1014,7 @@ export class SubagentFleetStatus {
 	}
 
 	private clearUiRegistration(): void {
+		this.clearWorkflowCoverage();
 		if (this.timer) clearInterval(this.timer);
 		this.timer = undefined;
 
@@ -998,5 +1044,9 @@ export class SubagentFleetStatus {
 		if (cleanupErrors.length > 1) {
 			throw new AggregateError(cleanupErrors, "Failed to clean up FleetView UI registration");
 		}
+	}
+
+	private clearWorkflowCoverage(): void {
+		if (this.ui) this.onWorkflowCoverageChange?.(this.ui, new Map());
 	}
 }
