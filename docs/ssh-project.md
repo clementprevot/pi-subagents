@@ -55,7 +55,7 @@ Ask Pi to delegate to the selected agent with `async:false` and `context:fresh`.
 
 ## Supported profile and refusals
 
-Selected agents may specify name, description, model/thinking, read/bash tools, foreground/fresh defaults, timeout/tool timeout and the supported context settings. Use `systemPromptMode: append`; project/global context remains enabled and skills are explicitly selected rather than automatically inherited. Other frontmatter requirements are rejected, not dropped.
+Selected agents may specify name, description, model/thinking, read/bash tools, optional text `write`, foreground/fresh defaults, timeout/tool timeout and the supported context settings. Use `systemPromptMode: append`; project/global context remains enabled and skills are explicitly selected rather than automatically inherited. Other frontmatter requirements are rejected, not dropped. `write` is provided only when the bound agent lists it.
 
 The following are unsupported and rejected: workflows/chains/parallel scripts, background/detach, fork/resume/recovery, nested delegation, managed worktrees and hooks, local Git/acceptance checks, explicit output/progress files, structured-output contracts, project management and resource reload/session replacement. Models may retry within their initialized session, but automatic fresh-session/retained-session relaunch is disabled.
 
@@ -65,7 +65,7 @@ Conflicting configured worktrees, forced async, permission contracts, budgets, i
 
 An explicitly enabled global subagent watchdog is also unsupported: this entry rejects that policy rather than silently turning it off. The ordinary local watchdog is not constructed for remote projects, because its settings/Git readers operate locally.
 
-`write`, `edit`, `grep`, `find`, `ls`, PowerShell and image/binary reads are not provided. Search/edit/build/test can be performed through remote Bash. Trusted provider extensions are still trusted local code; this is execution routing, **not a sandbox**.
+`edit`, `grep`, `find`, `ls`, PowerShell and image/binary reads are not provided. Search/edit/build/test can be performed through remote Bash. Trusted provider extensions are still trusted local code; this is execution routing, **not a sandbox**.
 
 ## Bounds and cancellation
 

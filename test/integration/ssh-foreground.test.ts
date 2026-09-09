@@ -6,6 +6,7 @@ import { devNull } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseSshEntrySelection, validateSshEntrySelection, sshStockCliArgs } from "../../src/runs/shared/ssh-cli-entry.ts";
+import { sshQuote } from "../../src/runs/shared/ssh-project-tools.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const tmpRoot = path.join(repo, "tmp");
@@ -94,7 +95,7 @@ pi.registerCommand('proof-reload',{description:'Proof reload',handler:async(_arg
 if(process.env.SSH_PROOF_CONFLICT==='1'||globalThis[key]>1)pi.registerTool({name:'read',label:'read',description:'Forbidden provider fallback',parameters:{type:'object',properties:{}},async execute(){throw new Error('PROVIDER_LOCAL_FALLBACK')}});
 pi.registerProvider('ssh-proof',{baseUrl:'http://127.0.0.1:1',api:'openai-completions',models:[{id:'proof-model',name:'Proof',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:32768,maxTokens:512}],streamSimple(model,context){
  const parent=context.tools?.some(t=>t.name==='subagent')||context.tools?.length===0;fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify({kind:parent?'PARENT_MODEL':'MODEL',value:{prompt:context.systemPrompt,tools:context.tools?.map(t=>t.name),messages:context.messages}})+'\\n');
- const stream=createAssistantMessageEventStream();const results=context.messages.filter(m=>m.role==='toolResult');const content=parent?(results.length===0&&context.tools?.length?[{type:'toolCall',id:'parent-read',name:'read',arguments:{path:${JSON.stringify(skill)},scope:'local-resource'}}]:[{type:'text',text:'PARENT_DONE'}]):results.length===0?[{type:'toolCall',id:'r',name:'read',arguments:{path:'AGENTS.md'}}]:results.length===1?[{type:'toolCall',id:'b',name:'bash',arguments:{command:'printf remote'}}]:[{type:'text',text:'REMOTE_CHILD_DONE'}];
+ const stream=createAssistantMessageEventStream();const results=context.messages.filter(m=>m.role==='toolResult');const writeProof=process.env.SSH_PROOF_WRITE==='1';const content=parent?(results.length===0&&context.tools?.length?[{type:'toolCall',id:'parent-read',name:'read',arguments:{path:${JSON.stringify(skill)},scope:'local-resource'}}]:[{type:'text',text:'PARENT_DONE'}]):writeProof?(results.length===0?[{type:'toolCall',id:'w',name:'write',arguments:{path:'notes \\' $(touch BAD)\`x\`.txt',content:'hello $HOME && \`touch LOCAL\`\\nsecond'}}]:[{type:'text',text:'REMOTE_WRITE_DONE'}]):results.length===0?[{type:'toolCall',id:'r',name:'read',arguments:{path:'AGENTS.md'}}]:results.length===1?[{type:'toolCall',id:'b',name:'bash',arguments:{command:'printf remote'}}]:[{type:'text',text:'REMOTE_CHILD_DONE'}];
  const message={role:'assistant',api:model.api,provider:model.provider,model:model.id,content,stopReason:content[0].type==='toolCall'?'toolUse':'stop',timestamp:Date.now(),usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}}};queueMicrotask(()=>{stream.push({type:'done',reason:message.stopReason,message});stream.end()});return stream;}});
  pi.on('before_agent_start',async(_,ctx)=>{if(!pi.getActiveTools().includes('subagent'))return;
  await new Promise(resolve=>{pi.events.on('prompt-template:subagent:response',result=>{fs.writeFileSync(${JSON.stringify(response)},JSON.stringify(result));resolve()});
@@ -137,7 +138,27 @@ const [a,b]=await Promise.all([factory.create(remote('concurrent-A')),factory.cr
 	assert.equal(failure.status, 1); assert.match(failure.stderr, /Failed to load extension/);
 	assert(!fs.readFileSync(trace, "utf8").includes('"MODEL"')); assert(!fs.readFileSync(trace, "utf8").includes('"PARENT_MODEL"'));
 	const selectedText = fs.readFileSync(agent, "utf8");
-	for (const unsupported of [selectedText.replace("async: false", "async: true"), selectedText.replace("defaultContext: fresh", "defaultContext: fork"), selectedText.replace("tools: read,bash", "tools: read,write"), selectedText.replace("systemPromptMode: append", "acceptance: true\nsystemPromptMode: append")]) {
+	fs.writeFileSync(agent, selectedText.replace("tools: read,bash", "tools: read,write"));
+	fs.writeFileSync(trace, ""); fs.rmSync(response, { force: true });
+	const beforeWrite = new Set(fs.readdirSync(unrelated, { recursive: true }).map(String));
+	const writeRun = spawnSync(process.execPath, [path.join(repo, "ssh-launch.mjs"), "--target", "target-write", "--project", "/srv/project", "--agent", agent, "--skill", skill, "--extension", provider, "--mode", "json", "--prompt", "Write now", "--offline"], { cwd: unrelated, env: { ...env, SSH_PROOF_WRITE: "1" }, input: "", encoding: "utf8", timeout: 30_000 });
+	assert.equal(writeRun.status, 0, JSON.stringify({ error: String(writeRun.error), stderr: writeRun.stderr, stdout: writeRun.stdout }));
+	assert.equal(JSON.parse(fs.readFileSync(response, "utf8")).status, "completed");
+	assert.equal(JSON.parse(fs.readFileSync(response, "utf8")).result.text, "REMOTE_WRITE_DONE");
+	const writeEvents = fs.readFileSync(trace, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+	assert(!writeEvents.some(e => ["UNRELATED", "PROCESS", "NETWORK"].includes(e.kind)), JSON.stringify(writeEvents));
+	const writeModels = writeEvents.filter(e => e.kind === "MODEL"); assert.equal(writeModels.length, 2);
+	assert.deepEqual(writeModels[0].value.tools.sort(), ["read", "write"]);
+	const writeScript = writeEvents.find(e => e.kind === "SCRIPT" && String(e.value).includes("dd of="))?.value as string;
+	assert(writeScript, JSON.stringify(writeEvents));
+	assert(writeScript.includes(sshQuote("/srv/project/notes ' $(touch BAD)`x`.txt")));
+	assert(writeScript.includes(sshQuote(Buffer.from("hello $HOME && `touch LOCAL`\nsecond", "utf8").toString("base64"))));
+	assert.deepEqual(new Set(fs.readdirSync(unrelated, { recursive: true }).map(String)), beforeWrite);
+	assert(!fs.existsSync(path.join(unrelated, "notes ' $(touch BAD)`x`.txt")));
+	const writeParents = writeEvents.filter(e => e.kind === "PARENT_MODEL");
+	assert(writeParents.every(e => !e.value.tools?.includes("write")));
+	fs.writeFileSync(agent, selectedText);
+	for (const unsupported of [selectedText.replace("async: false", "async: true"), selectedText.replace("defaultContext: fresh", "defaultContext: fork"), selectedText.replace("tools: read,bash", "tools: read,edit"), selectedText.replace("systemPromptMode: append", "acceptance: true\nsystemPromptMode: append")]) {
 		fs.writeFileSync(agent, unsupported); fs.writeFileSync(trace, "");
 		const rejected = spawnSync(process.execPath, [path.join(repo, "ssh-launch.mjs"), "--target", "target-A", "--project", "/srv/project", "--agent", agent, "--extension", provider, "--mode", "json", "--prompt", "Never prompt", "--offline"], { cwd: unrelated, env, input: "", encoding: "utf8", timeout: 15_000 });
 		assert.equal(rejected.status, 1); assert(!fs.readFileSync(trace, "utf8").includes('"SSH"')); assert(!fs.readFileSync(trace, "utf8").includes('"MODEL"'));

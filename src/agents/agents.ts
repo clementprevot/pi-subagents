@@ -2172,7 +2172,7 @@ export function loadSelectedAgentDocument(document: { path: string; content: str
 	const result = loadAgentsFromDefinitionFiles([{ filePath: document.path, content: document.content }], "user");
 	if (result.diagnostics.length || result.agents.length !== 1) throw new Error("Invalid selected SSH agent document.");
 	const agent = result.agents[0]!;
-	if (agent.defaultContext === "fork" || agent.defaultAsync === true || agent.systemPromptMode === "replace" || agent.tools?.some(tool => !["read", "bash"].includes(tool))) throw new Error("Selected SSH agent requires unsupported execution capabilities.");
+	if (agent.defaultContext === "fork" || agent.defaultAsync === true || agent.systemPromptMode === "replace" || agent.tools?.some(tool => !["read", "bash", "write"].includes(tool))) throw new Error("Selected SSH agent requires unsupported execution capabilities.");
 	return { ...agent, tools: agent.tools ?? ["read", "bash"], allowNestedSubagents: false, inheritProjectContext: true, inheritGlobalContext: true, inheritSkills: false };
 }
 

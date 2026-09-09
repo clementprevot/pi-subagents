@@ -59,7 +59,15 @@ export async function prepareSshContext(profile: SshProjectBootstrap, signal?: A
 	return documents.join("\n\n");
 }
 
-export function createSshProjectTools(profile: SshProjectBootstrap): ToolDefinition[] {
+function resolveBoundRemoteFile(projectDir: string, raw: string): string {
+	if (!raw || /[\u0000-\u001f\u007f]/u.test(raw)) throw new Error("Invalid remote path.");
+	const root = path.posix.resolve(projectDir);
+	const file = path.posix.resolve(root, raw);
+	if (file === root || !file.startsWith(`${root}/`)) throw new Error("Remote path is outside the bound project.");
+	return file;
+}
+
+export function createSshProjectTools(profile: SshProjectBootstrap, selectedTools?: readonly string[]): ToolDefinition[] {
 	const read: ToolDefinition = {
 		name: "read", label: "read", description: "Read bounded remote UTF-8 text, or an explicitly selected local Markdown snapshot with scope=local-resource.",
 		promptSnippet: "Read remote project text; selected local Markdown requires scope=local-resource and its exact selected path.",
@@ -103,5 +111,20 @@ export function createSshProjectTools(profile: SshProjectBootstrap): ToolDefinit
 			};
 		},
 	};
-	return [read, bash];
+	const write: ToolDefinition = {
+		name: "write", label: "write", description: "Write bounded remote UTF-8 text in the bound SSH project. Creates the file if needed and overwrites if it exists.",
+		promptSnippet: "Write remote project text only; no local filesystem fallback.",
+		parameters: Type.Object({ path: Type.String(), content: Type.String(), scope: Type.Optional(Type.String()) }),
+		async execute(_id, raw, signal) {
+			const args = raw as { path: string; content: string; scope?: string };
+			if (args.scope !== undefined && args.scope !== "project") throw new Error("Unsupported write scope.");
+			if (typeof args.content !== "string" || args.content.includes("\0")) throw new Error("Remote binary/image writes are unsupported.");
+			const bytes = Buffer.from(args.content, "utf8");
+			if (bytes.length > 262144) throw new Error("Remote text write exceeds 256 KiB.");
+			const file = resolveBoundRemoteFile(profile.projectDir, args.path);
+			await runSshProject(profile, `set -eu\nmkdir -p ${sshQuote(path.posix.dirname(file))}\nprintf '%s' ${sshQuote(bytes.toString("base64"))} | base64 -d | dd of=${sshQuote(file)} 2>/dev/null`, signal);
+			return { content: [{ type: "text", text: `Wrote ${bytes.length} bytes to ${file}` }], details: { path: file, bytes: bytes.length } };
+		},
+	};
+	return selectedTools?.includes("write") ? [read, bash, write] : [read, bash];
 }

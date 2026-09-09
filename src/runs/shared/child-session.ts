@@ -213,7 +213,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 			// Network prefetch must never occupy the shared local initialization queue.
 			const ssh = launch.sshProject ? await import("./ssh-project-tools.ts") : undefined;
 			const sshContext = ssh && launch.sshProject ? await ssh.prepareSshContext(launch.sshProject, launch.sshSignal) : undefined;
-			const sshTools = ssh && launch.sshProject ? ssh.createSshProjectTools(launch.sshProject) : undefined;
+			const sshTools = ssh && launch.sshProject ? ssh.createSshProjectTools(launch.sshProject, launch.tools) : undefined;
 			const sshPromptContext = launch.sshProject ? [launch.sshProject.globalContext, sshContext, ...(launch.sshProject.selectedDocuments?.skills ?? []).map(doc => `Selected local Markdown snapshot (${doc.path}):\n${doc.content}`)].filter(Boolean).join("\n\n") : undefined;
 			const sshErrors: ChildSessionExtensionError[] = [];
 			const reportExtensionError = (error: ChildSessionExtensionError) => { if (sshTools) sshErrors.push(error); launch.onExtensionError?.(error); };
