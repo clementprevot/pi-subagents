@@ -690,7 +690,22 @@ export class ScheduledRunManager {
 			return textResult(`Skipped schedule ${schedule.id}: current session is not its owner.`, [schedule]);
 		}
 		const run = await this.launch(store, schedule, this.now(), "manual", false);
-		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
+		const updated = store.get(schedule.id);
+		if (run.state === "running") this.satisfyManualLaunch(store, updated);
+		return textResult(`Manual schedule run ${run.id}: ${run.state}${run.asyncId ? ` (async ${run.asyncId})` : ""}.\nNext natural fire: ${updated.trigger.nextRunAt ?? "none (schedule satisfied)"}.`, [store.get(schedule.id)], [run], run.state === "failed_launch");
+	}
+
+	private satisfyManualLaunch(store: ScheduleStore, schedule: ScheduleRecord): void {
+		const now = this.now();
+		if (schedule.trigger.kind === "interval") {
+			schedule.trigger.nextRunAt = timestamp(now + schedule.trigger.everyMs);
+		} else {
+			schedule.trigger.nextRunAt = undefined;
+		}
+		schedule.updatedAt = timestamp(now);
+		store.write(schedule);
+		store.appendEvent(schedule, "schedule.manual_satisfied");
+		this.arm(schedule, store);
 	}
 
 	private async runDue(): Promise<AgentToolResult<Details>> {
@@ -809,6 +824,7 @@ export class ScheduledRunManager {
 
 	private async launch(store: ScheduleStore, schedule: ScheduleRecord, planned: number, dueReason: ScheduleRunRecord["dueReason"], advance: boolean): Promise<ScheduleRunRecord> {
 		const now = this.now();
+		const nextRunAtBeforeClaim = schedule.trigger.nextRunAt;
 		const run: ScheduleRunRecord = { schemaVersion: 1, id: this.randomId(), scheduleId: schedule.id, plannedAt: timestamp(planned), dueReason, state: "running", startedAt: timestamp(now) };
 		if (schedule.activeRunId) {
 			run.state = "skipped";
@@ -862,12 +878,20 @@ export class ScheduledRunManager {
 			run.state = "failed_launch";
 			run.completedAt = timestamp(this.now());
 			run.error = error instanceof Error ? error.message : String(error);
-			schedule.activeRunId = undefined;
-			schedule.updatedAt = timestamp(this.now());
-			store.write(schedule);
-			store.writeRun(schedule, run, "schedule.run.failed");
+			const latest = store.get(schedule.id);
+			latest.activeRunId = undefined;
+			if (!advance) {
+				if (latest.trigger.kind === "interval") {
+					latest.trigger.nextRunAt = nextRunAtBeforeClaim ?? latest.trigger.nextRunAt;
+				} else {
+					latest.trigger.nextRunAt = nextRunAtBeforeClaim;
+				}
+			}
+			latest.updatedAt = timestamp(this.now());
+			store.write(latest);
+			store.writeRun(latest, run, "schedule.run.failed");
 			fs.rmSync(lockPath, { force: true });
-			this.arm(schedule, store);
+			this.arm(latest, store);
 			return run;
 		}
 	}
