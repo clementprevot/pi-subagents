@@ -172,11 +172,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					assert.ok(error instanceof Error);
 					assert.match(error.message, new RegExp(`"steps":\\["${stepState}"\\]`));
 					assert.ok(error.message.includes(`mock queue: readable, prompt call records=${callCount}`));
-					assert.match(error.message, /runner.stdout.log: empty/);
-					assert.match(error.message, /runner.stderr.log: unreadable \(EISDIR\)/);
-					assert.match(error.message, /process-terminal.json: absent/);
-					assert.match(error.message, /runner-startup-proceed.json: readable, \d+ bytes \(contents withheld\)/);
-					assert.match(error.message, /events.jsonl: readable/);
+					assert.match(error.message, /runner.stdout.log: \{"bytes":0,.*\} \(contents withheld\)/);
+					assert.match(error.message, /runner.stderr.log: \{"bytes":\d+,.*\} \(contents withheld\)/);
+					assert.match(error.message, /process-terminal.json: ENOENT/);
+					assert.match(error.message, /runner-startup-proceed.json: \{"bytes":\d+,.*\} \(contents withheld\)/);
+					assert.match(error.message, /events.jsonl: .*"invalidLines":1/);
 					assert.doesNotMatch(error.message, /secret-/);
 					return true;
 				});
