@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { devNull } from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseSshEntrySelection, validateSshEntrySelection, sshStockCliArgs } from "../../src/runs/shared/ssh-cli-entry.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -96,7 +96,7 @@ pi.registerProvider('ssh-proof',{baseUrl:'http://127.0.0.1:1',api:'openai-comple
  await new Promise(resolve=>{pi.events.on('prompt-template:subagent:response',result=>{fs.writeFileSync(${JSON.stringify(response)},JSON.stringify(result));resolve()});
  pi.events.emit('prompt-template:subagent:request',{requestId:'proof',ownerRunId:'proof-owner',nodeId:'proof-node',agent:'ssh-worker',task:'Read the project and run the command',context:'fresh',cwd:ctx.cwd,model:'ssh-proof/proof-model',result:{kind:'text'}});});
  });}`);
-	const env = { ...process.env, HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT: sdkRoot, NODE_OPTIONS: `--experimental-strip-types --import ${preload}` };
+	const env = { ...process.env, HOME: home, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SUBAGENTS_PI_CODING_AGENT_PACKAGE_ROOT: sdkRoot, NODE_OPTIONS: `--experimental-strip-types --import ${pathToFileURL(preload).href}` };
 	for (const key of Object.keys(env)) if (key.startsWith("PI_SUBAGENT_") || /API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/iu.test(key)) delete env[key as keyof typeof env];
 	for (const target of ["target-A", "target-B"]) {
 		fs.writeFileSync(trace, ""); fs.rmSync(response, { force: true });
