@@ -97,11 +97,6 @@ function stripSeverityCompounds(task: string): string {
 }
 export { stripSeverityCompounds };
 
-// Hyphens and slashes are word boundaries, so a token like daily-update.mp3
-// or src/add.ts would otherwise look like the verbs update/add. Neutralize
-// only tokens that contain those verbs; leave objects such as package.json
-// so "Fix package.json" stays an implementation obligation. Acceptance still
-// uses the raw write-verb vocabulary.
 const PATH_LIKE_TOKEN_PATTERN = /[^\s]+[/\\][^\s]+|[^\s/\\]+\.[A-Za-z][A-Za-z0-9]{0,9}\b/g;
 const PATH_INTERNAL_IMPLEMENTATION_VERB = /\b(?:implement|edit|modify|refactor|delete|update|add|remove|replace|create)\b/i;
 
