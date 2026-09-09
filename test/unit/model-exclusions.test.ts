@@ -386,6 +386,86 @@ describe("model exclusions — transient recovery probes", () => {
 		}
 	});
 
+	it("does not steal a replacement store lock when two reclaimers see the same stale lock", async () => {
+		const store = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-store-lock-")), "exclusions.json");
+		const lockPath = `${store}.store.lock`;
+		const barrier = path.join(path.dirname(store), "barrier");
+		const ready = path.join(barrier, "ready");
+		const go = path.join(barrier, "go");
+		fs.mkdirSync(ready, { recursive: true });
+		fs.writeFileSync(store, JSON.stringify({ version: 1, exclusions: [] }), "utf-8");
+		fs.writeFileSync(lockPath, JSON.stringify({ pid: 999_999_999 }), "utf-8");
+		const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
+		const makeScript = (modelId: string, provider: string) => `
+			import { createRequire } from "node:module";
+			import { syncBuiltinESMExports } from "node:module";
+			const require = createRequire(import.meta.url); const fs = require("node:fs");
+			const lockPath = ${JSON.stringify(lockPath)};
+			const ready = ${JSON.stringify(ready)};
+			const go = ${JSON.stringify(go)};
+			const sleep = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+			const read = fs.readFileSync; let paused = false;
+			fs.readFileSync = (...args) => {
+				const value = read(...args);
+				if (!paused && args[0] === lockPath) {
+					paused = true;
+					fs.writeFileSync(ready + "/${provider}", "");
+					while (!fs.existsSync(go)) sleep();
+				}
+				return value;
+			};
+			syncBuiltinESMExports();
+			const { recordModelFailure } = await import(${JSON.stringify(moduleUrl)});
+			recordModelFailure({ modelId: ${JSON.stringify(modelId)}, provider: ${JSON.stringify(provider)}, reason: "invalid api key" });
+			console.log("wrote");
+		`;
+		const environment = { ...process.env, PI_MODEL_EXCLUSIONS_PATH: store };
+		try {
+			const first = runIsolatedModule(makeScript("gpt-4", "openai"), environment);
+			const second = runIsolatedModule(makeScript("claude", "anthropic"), environment);
+			await waitForFiles(ready, 2);
+			fs.writeFileSync(go, "");
+			await Promise.all([first, second]);
+			const previousStore = process.env.PI_MODEL_EXCLUSIONS_PATH;
+			process.env.PI_MODEL_EXCLUSIONS_PATH = store;
+			try {
+				reloadFromDisk();
+				assert.equal(findModelExclusion("openai/gpt-4")?.reason, "invalid api key");
+				assert.equal(findModelExclusion("anthropic/claude")?.reason, "invalid api key");
+			} finally {
+				if (previousStore === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
+				else process.env.PI_MODEL_EXCLUSIONS_PATH = previousStore;
+				reloadFromDisk();
+			}
+		} finally {
+			fs.rmSync(path.dirname(store), { recursive: true, force: true });
+		}
+	});
+
+	it("does not let a stale flushPersist overwrite a newer locked store update", async () => {
+		const store = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pi-store-flush-")), "exclusions.json");
+		const previousStore = process.env.PI_MODEL_EXCLUSIONS_PATH;
+		process.env.PI_MODEL_EXCLUSIONS_PATH = store;
+		try {
+			reloadFromDisk();
+			recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+			const moduleUrl = pathToFileURL(path.resolve("src/runs/shared/model-exclusions.ts")).href;
+			await runIsolatedModule(
+				`import { recordModelFailure } from ${JSON.stringify(moduleUrl)}; recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "invalid api key" });`,
+				{ ...process.env, PI_MODEL_EXCLUSIONS_PATH: store },
+			);
+			flushPersist();
+			reloadFromDisk();
+			assert.equal(findModelExclusion("openai/gpt-4")?.reason, "503 service unavailable");
+			assert.equal(findModelExclusion("anthropic/claude")?.reason, "invalid api key");
+		} finally {
+			if (previousStore === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
+			else process.env.PI_MODEL_EXCLUSIONS_PATH = previousStore;
+			reloadFromDisk();
+			fs.rmSync(path.dirname(store), { recursive: true, force: true });
+		}
+	});
+
 	it("does not throw when successful-probe cleanup cannot persist", () => {
 		const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-probe-cleanup-"));
 		const isolated = path.join(isolatedRoot, "nested", "exclusions.json");

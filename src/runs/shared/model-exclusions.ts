@@ -45,6 +45,12 @@ let defaultTTLMs = DEFAULT_MODEL_EXCLUSION_TTL_MS;
 let loadedTTLCeilingMs: number | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistSeq = 0;
+const DISK_RAW_UNKNOWN = Symbol("disk-raw-unknown");
+let lastSeenDiskRaw: string | undefined | typeof DISK_RAW_UNKNOWN = DISK_RAW_UNKNOWN;
+
+function serializeExclusionStore(items: ModelExclusion[]): string {
+	return JSON.stringify({ version: 1, exclusions: deduplicate(items) }, null, 2);
+}
 
 const AUTH_FAILURE_PATTERNS = [
 	/auth(?:entication)?/i,
@@ -117,16 +123,30 @@ export function getExclusionsFilePath(): string {
  */
 export function flushPersist(): void {
 	const file = getExclusionsFilePath();
+	const lockPath = acquireExclusionStoreLock();
+	if (!lockPath) {
+		console.error(`[model-exclusions] Failed to persist exclusions to ${file}: store lock is busy.`);
+		return;
+	}
 	try {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
+		let current: string | undefined;
+		try {
+			current = fs.readFileSync(file, "utf-8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			current = undefined;
+		}
+		if (lastSeenDiskRaw !== DISK_RAW_UNKNOWN && current !== lastSeenDiskRaw) return;
+		const payload = serializeExclusionStore(exclusions);
 		const tmpPath = `${file}.${process.pid}.${persistSeq++}.tmp`;
-		fs.writeFileSync(tmpPath, JSON.stringify({
-			version: 1,
-			exclusions: deduplicate(exclusions),
-		}, null, 2), "utf-8");
+		fs.writeFileSync(tmpPath, payload, "utf-8");
 		fs.renameSync(tmpPath, file);
+		lastSeenDiskRaw = payload;
 	} catch (error) {
 		console.error(`[model-exclusions] Failed to persist exclusions to ${file}:`, error);
+	} finally {
+		try { fs.rmSync(lockPath, { force: true }); } catch { /* leftover lock is reclaimed when its PID dies */ }
 	}
 }
 
@@ -145,6 +165,7 @@ function ensureLoaded(): void {
 	loaded = true;
 	try {
 		const raw = fs.readFileSync(getExclusionsFilePath(), "utf-8");
+		lastSeenDiskRaw = raw;
 		const data = JSON.parse(raw);
 		if (data.version === 1) {
 			if (!Array.isArray(data.exclusions)) throw new Error("Model exclusion store version 1 must contain an exclusions array.");
@@ -168,6 +189,8 @@ function ensureLoaded(): void {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 			console.error(`[model-exclusions] Failed to load exclusions from ${getExclusionsFilePath()}:`, error);
+		} else {
+			lastSeenDiskRaw = undefined;
 		}
 	}
 }
@@ -402,17 +425,21 @@ function readProbeClaimSnapshot(claimPath: string): ProbeClaimSnapshot | "unread
 	return { raw, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, claim: parseStoredProbeClaim(raw) };
 }
 
-function unlinkObservedProbeClaim(claimPath: string, observed: ProbeClaimSnapshot): boolean {
+function unlinkObservedFile(filePath: string, observed: { raw: string; ino: number; size: number }): boolean {
 	try {
-		const current = fs.statSync(claimPath);
+		const current = fs.statSync(filePath);
 		if (observed.ino !== 0 && current.ino !== observed.ino) return false;
 		if (current.size !== observed.size) return false;
-		if (fs.readFileSync(claimPath, "utf-8") !== observed.raw) return false;
-		fs.rmSync(claimPath);
+		if (fs.readFileSync(filePath, "utf-8") !== observed.raw) return false;
+		fs.rmSync(filePath);
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+function unlinkObservedProbeClaim(claimPath: string, observed: ProbeClaimSnapshot): boolean {
+	return unlinkObservedFile(claimPath, observed);
 }
 
 function tryCreateProbeClaim(claimPath: string, owner: string): boolean {
@@ -538,18 +565,27 @@ function acquireExclusionStoreLock(): string | undefined {
 			return lockPath;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+			let raw: string;
+			let stat: fs.Stats;
+			try {
+				stat = fs.statSync(lockPath);
+				raw = fs.readFileSync(lockPath, "utf-8");
+			} catch {
+				waitBriefly();
+				continue;
+			}
 			let live = false;
 			try {
-				const parsed = JSON.parse(fs.readFileSync(lockPath, "utf-8")) as { pid?: unknown };
+				const parsed = JSON.parse(raw) as { pid?: unknown };
 				live = typeof parsed.pid === "number" && processIsAlive(parsed.pid);
 			} catch {
 				live = false;
 			}
-			if (!live) {
-				try { fs.rmSync(lockPath, { force: true }); } catch { /* another reclaimer won */ }
+			if (live) {
+				waitBriefly();
 				continue;
 			}
-			waitBriefly();
+			if (!unlinkObservedFile(lockPath, { raw, ino: stat.ino, size: stat.size })) waitBriefly();
 		}
 	}
 	return undefined;
@@ -569,9 +605,11 @@ function writeExclusionsIfUnchanged(expectedRaw: string | undefined, next: Model
 			current = undefined;
 		}
 		if (current !== expectedRaw) return false;
+		const payload = serializeExclusionStore(next);
 		const tmpPath = `${file}.${process.pid}.${persistSeq++}.tmp`;
-		fs.writeFileSync(tmpPath, JSON.stringify({ version: 1, exclusions: deduplicate(next) }, null, 2), "utf-8");
+		fs.writeFileSync(tmpPath, payload, "utf-8");
 		fs.renameSync(tmpPath, file);
+		lastSeenDiskRaw = payload;
 		return true;
 	} finally {
 		try { fs.rmSync(lockPath, { force: true }); } catch { /* leftover lock is reclaimed when its PID dies */ }
