@@ -316,9 +316,6 @@ export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): 
 			.getAllTools()
 			.filter((tool) => {
 				const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
-				// An auto-discovered extension may wrap a builtin under the same name.
-				// Keep that host capability without treating unrelated extension tools
-				// as builtins merely because they share the same provenance.
 				return source === "builtin" || (source === "auto" && PI_BUILTIN_TOOL_NAMES.has(tool.name));
 			})
 			.map((tool) => tool.name);

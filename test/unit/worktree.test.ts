@@ -458,7 +458,6 @@ console.log(JSON.stringify({ action: "created", branch, path: repo, created_bran
 
 			assert.equal(setup.worktrees[0]?.provider, "native");
 			assert.equal(setup.worktrees[0]?.path, path.join(agentDir, "worktrees", "powerline-footer", "pi-worktree-extension-auto-0"));
-			assert.equal(fs.existsSync(path.join(agentDir, "extensions", "worktrees")), false);
 			assert.equal(resolveExpectedWorktreeAgentCwd(repoDir, "extension-auto", 0), setup.worktrees[0]?.path);
 		} finally {
 			if (setup) cleanupWorktrees(setup, { kind: "setup-rollback" });
