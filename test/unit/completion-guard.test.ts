@@ -386,6 +386,29 @@ test("implementation tool contract rejects read-only worker launches", () => {
 	}), undefined);
 });
 
+test("read-only audit tasks survive host-clamped declared mutation tools", () => {
+	const tools = ["read", "grep", "find", "ls", "contact_supervisor"];
+	const requestedTools = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"];
+	assert.equal(validateImplementationToolContract({
+		agent: "delegate",
+		task: "Read-only bug investigation. No source edits, commits, pushes, merges, installs, or state repair. Return concrete findings and a minimal fix proposal.",
+		tools,
+		requestedTools,
+	}), undefined);
+	for (const task of [
+		"Review only; implement the approved fix.",
+		"Without edits, update the parser.",
+		"Create a summary",
+	]) {
+		assert.match(validateImplementationToolContract({
+			agent: "delegate",
+			task,
+			tools,
+			requestedTools,
+		}) ?? "", /no mutation-capable tools/, task);
+	}
+});
+
 test("oracle review tasks with bash available do not require mutation", () => {
 	const task = "Review prep findings and determine what to implement with playbooks instead of before.";
 	const result = evaluateCompletionMutationGuard({
@@ -707,8 +730,26 @@ test("writer-role tasks with unknown implementation wording reject read-only lau
 			task,
 			tools: ["read", "grep", "find", "ls", "contact_supervisor"],
 			requestedTools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
-		}), /no mutation-capable tools/, task);
+		}) ?? "", /no mutation-capable tools/, task);
 	}
+});
+
+test("explicit writer acceptance role overrides reviewer agent heuristics", () => {
+	assert.match(validateImplementationToolContract({
+		agent: "reviewer",
+		task: "Handle the authentication flow",
+		acceptanceRole: "writer",
+		tools: ["read", "grep", "find", "ls", "contact_supervisor"],
+		requestedTools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
+	}) ?? "", /no mutation-capable tools/);
+
+	assert.equal(validateImplementationToolContract({
+		agent: "reviewer",
+		task: "Review only and return findings",
+		acceptanceRole: "writer",
+		tools: ["read", "grep", "find", "ls", "contact_supervisor"],
+		requestedTools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
+	}), undefined);
 });
 
 test("configured extensions do not rescue clamped-away builtin mutation tools", () => {
@@ -718,7 +759,7 @@ test("configured extensions do not rescue clamped-away builtin mutation tools", 
 		tools: ["read", "grep", "find", "ls", "contact_supervisor"],
 		configuredExtensions: ["/tmp/provider.ts"],
 		requestedTools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
-	}), /no mutation-capable tools/);
+	}) ?? "", /no mutation-capable tools/);
 });
 
 test("read-only agents and pure extension workers keep their launch contracts", () => {

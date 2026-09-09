@@ -7,6 +7,7 @@
  * - `classifyTaskMutationIntent` / `expectsImplementationMutation`: does the
  *   task REQUIRE file changes? Consumed by the completion mutation guard,
  *   which blocks completion, so its vocabulary is deliberately narrow.
+ *   Verbs inside filenames and path-like tokens do not count.
  * - `taskMayMutate`: COULD the task plausibly change files? Consumed by
  *   acceptance level inference, which only raises evidence gates, so its
  *   vocabulary is deliberately broad (any bare write verb).
@@ -18,16 +19,20 @@
  */
 
 const REVIEW_ONLY_PATTERNS = [
-	/\breview only\b/i,
+	/\b(?:review|read)[- ]only\b/i,
+	/\bno\s+(?:source\s+)?edits?\b/i,
+	/\bwithout\s+edits?\b/i,
 	/\bsuggest fixes only\b/i,
 	/\bonly return findings\b/i,
 	/\breturn findings only\b/i,
 ];
 
+const NO_EDIT_BOUNDARY_ASSERTION_PATTERN = /\bno\s+(?:source\s+)?edits?\s*,\s*(?:commits?|pushes?|merges?|installs?|changes?|writes?)\b/i;
+
 const REVIEWER_REQUIRED_EDIT_PATTERNS = [
 	/\bmust\s+(?:edit|modify|change|fix|patch|apply|implement)\b/i,
 	/\brequired\s+to\s+(?:edit|modify|change|fix|patch|apply|implement)\b/i,
-	/(?:^|[.!?\n]\s*)implement\s+(?:the\s+)?(?:approved|requested|specified|file|code|source|fix(?:es)?|changes?)\b/i,
+	/(?:^|[.!?:;,\n]\s*)implement\s+(?:the\s+)?(?:approved|requested|specified|file|code|source|fix(?:es)?|changes?)\b/i,
 	/\bregardless\s+of\s+findings\b/i,
 	/\balways\s+(?:edit|modify|change|fix|patch|apply|implement)\b/i,
 	/\bapply\s+(?:the\s+)?fix(?:es)?\s+directly\b/i,
@@ -40,7 +45,7 @@ const REVIEWER_REQUIRED_EDIT_PATTERNS = [
 // being swallowed as the object.
 // Accept serialized line separators too: workflow prompts can carry literal
 // `\\n`/`\\r\\n` between clauses instead of decoded newlines.
-const NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b((?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
+const NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+(?:edit|modify|write(?:\s+to)?|touch|change|implement)\b((?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
 const COORDINATED_NO_EDIT_PROHIBITION_PATTERN = /(?:\b|\\(?:r\\n|n))(?:do not|don't|must not)\s+((?=(?:(?!\\(?:r\\n|n))[^.;:!?\n–—-])*\b(?:and|or)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b)(?:(?!\\(?:r\\n|n))[^.;:!?\n–—-])*?\b(?:and|or)\s+(?:edit|modify|write(?:\s+to)?|touch|change)\b(?:(?!\b(?:but|and|then)\b|\\(?:r\\n|n))[^.;,:!?\n–—-])*)/gi;
 
 /** Objects of a no-edit prohibition that mean "the codebase in general" rather than a named scope. */
@@ -85,12 +90,19 @@ const RESEARCH_AGENT_PATTERNS = [
 // CLI flags like "--fix" and genuine clause-level dashes like "branch—fix it"),
 // strip the known severity compounds (must|should|needs + dash + verb) from the
 // task text before matching. Dash coverage: ASCII hyphen + U+2010..U+2015.
-const SEVERITY_COMPOUND_PATTERN = /\b(?:must|should|needs)[\-\u2010-\u2015](?:fix|edit|update|add|remove|replace|create|apply|make|do|implement|modify|delete|patch)\b/gi;
+const SEVERITY_COMPOUND_PATTERN = /\b(?:must|should|needs)[-\u2010-\u2015](?:fix|edit|update|add|remove|replace|create|apply|make|do|implement|modify|delete|patch)\b/gi;
 
 function stripSeverityCompounds(task: string): string {
 	return task.replace(SEVERITY_COMPOUND_PATTERN, " ");
 }
 export { stripSeverityCompounds };
+
+const PATH_LIKE_TOKEN_PATTERN = /[^\s]+[/\\][^\s]+|[^\s/\\]+\.[A-Za-z][A-Za-z0-9]{0,9}\b/g;
+const PATH_INTERNAL_IMPLEMENTATION_VERB = /\b(?:implement|edit|modify|refactor|delete|update|add|remove|replace|create)\b/i;
+
+function stripPathLikeTokens(task: string): string {
+	return task.replace(PATH_LIKE_TOKEN_PATTERN, (token) => (PATH_INTERNAL_IMPLEMENTATION_VERB.test(token) ? " " : token));
+}
 
 const FIX_OR_PATCH_IMPLEMENTATION_PATTERN = /\b(?:fix|patch)\s+(?:(?:it|this|that|them|each|any|all|these|those)\b|(?:(?:a|an|the|any|all)\s+)?(?:(?:failing|failed|broken|flaky|red|cold|start|current|existing|reported|approved|known|regression|unit|integration|e2e|source|typescript|type-?script|ts|type-?check|compiler)\s+)*(?:bug|defect|issues?|problems?|failures?|regressions?|tests?|errors?|items?|typos?|code|source|implementation|component|function|module|class|method|logic|file|files|readme|docs?|changelog|package\.json|config|manifest|extension|prompt|command|lint(?:ing)?|build|ci|type-?check|type\s+checking)\b)/i;
 
@@ -103,12 +115,18 @@ const WORKER_IMPLEMENTATION_PATTERNS = [
 	/\bdo those fixes\b/i,
 ];
 
-const GENERAL_IMPLEMENTATION_PATTERNS = [
+const FOLLOW_ON_IMPLEMENTATION_PATTERN = /(?:^|[.!?:;,\n])\s*(?:fix|patch|update|add|remove|replace|create|delete)\s+(?:(?:the|a|an|this|that|these|those|requested|specified|current|existing|approved|your|our)\s+)(?!(?:report|summary|findings?|analysis|recommendations?|answer|response|proposal|plan|issue|bug report)\b)[a-z][\w./-]*/i;
+const ADVISORY_INFINITIVE_PATTERN = /\b(?:explain|recommend|describe)\s+how\s+to\s+(?:fix|patch|update|add|remove|replace|create|delete|implement|edit|modify|refactor)\b/i;
+const EXPLICIT_IMPLEMENTATION_PATTERNS = [
 	/\b(?:implement|edit|modify|refactor)\b/i,
-	FIX_OR_PATCH_IMPLEMENTATION_PATTERN,
 	/\bapply\s+(?:the\s+)?(?:(?:suggested|proposed|recommended)\s+)?(?:changes?|fix(?:es)?|patch)\b/i,
 	/\bmake\s+(?:the\s+)?changes\b/i,
 	/\bdo those fixes\b/i,
+];
+
+const GENERAL_IMPLEMENTATION_PATTERNS = [
+	...EXPLICIT_IMPLEMENTATION_PATTERNS,
+	FIX_OR_PATCH_IMPLEMENTATION_PATTERN,
 	/\b(?:update|add|remove|replace|delete|create)\s+(?:the\s+)?(?:file|files|code|source|implementation|test|tests|component|function|module|class|method|logic|import|imports|readme|docs?|changelog|package\.json|config|manifest|extension|prompt|command)\b/i,
 ];
 
@@ -141,10 +159,13 @@ interface NoEditProhibitionAnalysis {
 }
 
 function analyzeNoEditProhibitions(taskText: string): NoEditProhibitionAnalysis {
+	const readOnlyBoundary = NO_EDIT_BOUNDARY_ASSERTION_PATTERN.test(taskText);
 	let present = REVIEW_ONLY_PATTERNS.some((pattern) => pattern.test(taskText))
-		|| NO_TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(taskText));
-	let blanket = present;
-	let strippedText = stripPatterns(taskText, [...REVIEW_ONLY_PATTERNS, ...NO_TOOL_INTENT_PATTERNS]);
+		|| NO_TOOL_INTENT_PATTERNS.some((pattern) => pattern.test(taskText))
+		|| readOnlyBoundary;
+	let blanket = false;
+	let strippedText = stripPatterns(taskText, [...REVIEW_ONLY_PATTERNS, ...NO_TOOL_INTENT_PATTERNS, ADVISORY_INFINITIVE_PATTERN]);
+	if (readOnlyBoundary) strippedText = stripPatterns(strippedText, [NO_EDIT_BOUNDARY_ASSERTION_PATTERN]);
 	const stripNoEditProhibition = (match: string, object: string, offset: number, source: string): string => {
 		present = true;
 		if (GENERIC_PROHIBITION_OBJECT.test(object) && !hasScopedProhibitionContinuation(source.slice(offset + match.length))) blanket = true;
@@ -177,11 +198,18 @@ export function classifyTaskMutationIntent(agent: string, task: string): TaskMut
 	const prohibitions = analyzeNoEditProhibitions(taskTextWithoutScopedConstraints);
 	if (prohibitions.present) {
 		if (prohibitions.blanket) return { kind: "read-only" };
-		return hasImplementationIntent(agent, prohibitions.strippedText) ? { kind: "implementation" } : { kind: "read-only" };
+		const remaining = stripPathLikeTokens(prohibitions.strippedText);
+		if (isReviewerStyleAgent(agent)) {
+			return hasImplementationIntent(agent, remaining) ? { kind: "implementation" } : { kind: "read-only" };
+		}
+		return EXPLICIT_IMPLEMENTATION_PATTERNS.some((pattern) => pattern.test(remaining))
+			|| FOLLOW_ON_IMPLEMENTATION_PATTERN.test(remaining)
+			? { kind: "implementation" }
+			: { kind: "read-only" };
 	}
 
 	if (RESEARCH_AGENT_PATTERNS.some((pattern) => pattern.test(agent))) return { kind: "read-only" };
-	if (hasImplementationIntent(agent, taskText)) return { kind: "implementation" };
+	if (hasImplementationIntent(agent, stripPathLikeTokens(taskText))) return { kind: "implementation" };
 	if (isReviewerStyleAgent(agent)) return { kind: "read-only" };
 	return taskHasReadOnlyDeliverable(taskTextWithoutScopedConstraints) ? { kind: "read-only" } : { kind: "unknown" };
 }

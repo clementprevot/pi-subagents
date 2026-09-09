@@ -10,6 +10,7 @@ import {
 	FLEET_STATUS_WIDGET_KEY,
 	SubagentFleetStatus,
 	collectFleetStatusEntries,
+	fleetAgentIdentityColor,
 	formatFleetElapsed,
 	formatFleetTokens,
 	resolveFleetViewPlacement,
@@ -202,6 +203,57 @@ describe("below-editor subagent FleetView", () => {
 			assert.equal(component.render(80).length, 1);
 			assert.deepEqual(fleet.handleKey("\x1b[D"), { consume: true });
 			assert.ok(component.render(80).length > 1, "Left should also expand the roster");
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("keeps common FleetView agent identities on distinct theme colors", () => {
+		for (const [left, right] of [["scout", "worker"], ["tester", "explorer"], ["debug", "videoReview"]] as const) {
+			assert.notEqual(fleetAgentIdentityColor(left), fleetAgentIdentityColor(right));
+		}
+	});
+
+	it("keeps agent color stable when async display labels differ", () => {
+		const state = stateForTest();
+		state.asyncJobs.set("labeled-agents", {
+			asyncId: "labeled-agents",
+			asyncDir: "/tmp/labeled-agents",
+			status: "running",
+			mode: "parallel",
+			startedAt: Date.now() - 1_000,
+			updatedAt: Date.now(),
+			steps: [
+				{ agent: "scout", label: "Find seams", status: "running", index: 0 },
+				{ agent: "scout", label: "Audit API", status: "running", index: 1 },
+			],
+		});
+		const colorTheme = {
+			fg: (name: string, text: string) => `⟦${name}⟧${text}⟦/⟧`,
+			bg: (_name: string, text: string) => text,
+			bold: (text: string) => text,
+		};
+		let widgetFactory: ((tui: unknown, theme: typeof colorTheme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme: colorTheme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext(ctx);
+			const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, colorTheme);
+			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
+			const lines = component.render(160);
+			const colorFor = (label: string) => lines.find((line) => line.includes(label))?.match(new RegExp(`⟦(\\w+)⟧${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))?.[1];
+			assert.equal(colorFor("Find seams (scout)"), colorFor("Audit API (scout)"));
+			assert.equal(colorFor("Find seams (scout)"), fleetAgentIdentityColor("scout"));
 		} finally {
 			fleet.dispose();
 		}
