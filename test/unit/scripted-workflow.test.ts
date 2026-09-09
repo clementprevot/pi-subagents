@@ -6,6 +6,8 @@ import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 import { preflightWorkflowWorktrees } from "../../src/runs/foreground/subagent-executor.ts";
+import { runSetupCommand } from "../../src/runs/shared/worktree-setup-command.ts";
+import { claimRunFanoutBatch, createRunFanoutBudget, getRunFanoutBudgetSnapshot } from "../../src/runs/shared/run-fanout-budget.ts";
 
 describe("scripted workflow runtime", () => {
 	it("uses ordinary statement-body return semantics", async () => {
@@ -2613,6 +2615,40 @@ describe("scripted workflow runtime", () => {
 		resolveAdmission();
 		await new Promise((resolve) => queueMicrotask(resolve));
 		assert.equal(launchCount, 0);
+	});
+
+	it("classifies admission subprocess cancellation on workflow timeout as stopped", { timeout: 5_000 }, async (t) => {
+		const budget = createRunFanoutBudget("admission-timeout", 1);
+		t.after(() => fs.rmSync(budget.directory, { recursive: true, force: true }));
+		let spawned = false;
+		let launches = 0;
+		let childSettled!: (result: { outcome: string; error?: string }) => void;
+		const child = new Promise<{ outcome: string; error?: string }>((resolve) => { childSettled = resolve; });
+		const workflow = runWorkflowScript({
+			script: `await runs.run("slow", { agent: "worker", task: "wait" });`,
+			workflowRunId: "admission-timeout",
+			timeoutMs: 1_000,
+			async admit(calls, signal) {
+				const result = await runSetupCommand(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+					signal, onSpawn() { spawned = true; },
+				});
+				if (result.error) throw result.error;
+				claimRunFanoutBatch(budget, calls.map(({ key }) => key));
+			},
+			onChildSettled: childSettled,
+			async launch(key) {
+				launches++;
+				return { key, ok: true, output: "unexpected", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "timeout");
+		assert.equal(spawned, true);
+		const result = await child;
+		assert.equal(result.outcome, "stopped");
+		assert.match(result.error ?? "", /timed out/);
+		assert.equal(launches, 0);
+		assert.deepEqual(getRunFanoutBudgetSnapshot(budget), { used: 0, limit: 1, remaining: 1 });
 	});
 
 	it("drops a child response that settles after the workflow aborts", async () => {

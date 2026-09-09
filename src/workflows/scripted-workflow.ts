@@ -2288,6 +2288,10 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				} finally {
 					launchSemaphore.release();
 				}
+			}, (error: unknown) => {
+				if (!childController.signal.aborted) throw error;
+				const reason = childController.signal.reason;
+				return stoppedChildResult(key, reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
 			}).then((result) => {
 				let normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
 				if (resolvedResumeLineage?.length && normalized.runId) {
