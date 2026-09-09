@@ -318,34 +318,6 @@ function scheduleCleanup(nodeExecutable: string, paths: string[]): void {
 	}
 }
 
-function scheduleTabClose(input: {
-	nodeExecutable: string;
-	orcaCommand: string;
-	handle: string;
-	title: string;
-	tabId: string;
-	delayMs: number;
-}): void {
-	try {
-		const watchdog = spawn(input.nodeExecutable, [
-			"-e", ORCA_CLOSE_WATCHDOG_SCRIPT,
-			String(input.delayMs),
-			input.orcaCommand,
-			input.handle,
-			input.title,
-			input.tabId,
-		], {
-			detached: true,
-			stdio: "ignore",
-			windowsHide: true,
-		});
-		watchdog.once("error", () => {});
-		watchdog.unref();
-	} catch {
-		// Tab auto-close remains best effort for this optional observer.
-	}
-}
-
 function claimAutoClose(manifestPath: string | undefined): boolean {
 	if (!manifestPath) return false;
 	try {
@@ -365,23 +337,6 @@ function readObserverManifest(manifestPath: string | undefined): OrcaObserverMan
 	} catch {
 		return undefined;
 	}
-}
-
-function extractOrcaHandle(parsed: unknown): { handle?: string; tabId?: string; title?: string } {
-	if (!parsed || typeof parsed !== "object") return {};
-	const record = parsed as Record<string, unknown>;
-	const nested = record.terminal
-		?? (record.result && typeof record.result === "object" && !Array.isArray(record.result)
-			? ((record.result as Record<string, unknown>).terminal ?? record.result)
-			: undefined)
-		?? record;
-	if (!nested || typeof nested !== "object" || Array.isArray(nested)) return {};
-	const terminal = nested as Record<string, unknown>;
-	return {
-		handle: typeof terminal.handle === "string" ? terminal.handle : undefined,
-		tabId: typeof terminal.tabId === "string" ? terminal.tabId : undefined,
-		title: typeof terminal.title === "string" ? terminal.title : undefined,
-	};
 }
 
 function loadOrcaProgressTabsConfig(): OrcaProgressTabsConfig | undefined {
@@ -594,22 +549,28 @@ export function createOrcaProgressTab(input: {
 						const delaySec = config?.autoCloseDelaySec;
 						if (status === "completed" && typeof delaySec === "number" && delaySec > 0) {
 							const manifest = readObserverManifest(manifestPath);
-							const extracted = extractOrcaHandle(manifest?.orca);
-							const handle = (typeof manifest?.orcaHandle === "string" && manifest.orcaHandle)
-								|| extracted.handle;
-							const tabId = (typeof manifest?.orcaTabId === "string" && manifest.orcaTabId)
-								|| extracted.tabId;
-							const expectedTitle = (typeof manifest?.orcaTitle === "string" && manifest.orcaTitle)
-								|| extracted.title;
-							if (handle && expectedTitle && tabId && claimAutoClose(manifestPath)) {
-								scheduleTabClose({
-									nodeExecutable,
-									orcaCommand: command,
-									handle,
-									title: expectedTitle,
-									tabId,
-									delayMs: delaySec * 1000,
-								});
+							const handle = typeof manifest?.orcaHandle === "string" ? manifest.orcaHandle : "";
+							const title = typeof manifest?.orcaTitle === "string" ? manifest.orcaTitle : "";
+							const tabId = typeof manifest?.orcaTabId === "string" ? manifest.orcaTabId : "";
+							if (handle && title && tabId && claimAutoClose(manifestPath)) {
+								try {
+									const watchdog = spawn(nodeExecutable, [
+										"-e", ORCA_CLOSE_WATCHDOG_SCRIPT,
+										String(delaySec * 1000),
+										command,
+										handle,
+										title,
+										tabId,
+									], {
+										detached: true,
+										stdio: "ignore",
+										windowsHide: true,
+									});
+									watchdog.once("error", () => {});
+									watchdog.unref();
+								} catch {
+									// Tab auto-close remains best effort for this optional observer.
+								}
 							}
 						}
 					}
