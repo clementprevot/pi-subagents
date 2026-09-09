@@ -1,6 +1,6 @@
 import { splitKnownThinkingSuffix as splitThinkingSuffix, type ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { Usage } from "../../shared/types.ts";
-import { filterFallbackCandidates, findModelExclusion, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
+import { filterFallbackCandidates, findModelExclusion, parseModelKey, planTransientModelRecoveryProbe, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { redactSecretValues } from "./permissions.ts";
 
@@ -516,6 +516,13 @@ export function buildModelCandidates(
 		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels),
 	});
 	if (resolved.length === 0) {
+		const recoveryProbe = origin === "explicit" ? undefined : planTransientModelRecoveryProbe(candidates);
+		if (recoveryProbe) {
+			if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);
+			if (skippedFallback) resolveRequiredSubagentModelCandidate(skippedFallback, availableModels, preferredProvider);
+			console.warn(`[pi-subagents] Cached exclusions leave no ordinary candidate; planning one transient recovery probe for '${sanitizeModelExclusionDiagnostic(recoveryProbe.candidate, "unknown")}'.`);
+			return [recoveryProbe.candidate];
+		}
 		if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);
 		if (candidates.length === 0 && skippedFallback) resolveRequiredSubagentModelCandidate(skippedFallback, availableModels, preferredProvider);
 		if (candidates.length > 0) {
@@ -654,3 +661,10 @@ export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?:
 		? `[fallback] ${attempt.model} failed: ${failure}. Retrying with ${nextModel}.`
 		: `[fallback] ${attempt.model} failed: ${failure}.`;
 }
+
+export function formatTransientRecoveryProbeFailure(error: string | undefined): string {
+	return `Transient recovery probe failed; provider remains live-unavailable: ${sanitizeModelExclusionDiagnostic(error, "runtime-failure")}.`;
+}
+
+export const TRANSIENT_RECOVERY_PROBE_IN_FLIGHT =
+	"Transient recovery probe already in flight; provider remains cache-blocked/unprobed.";

@@ -409,6 +409,60 @@ describe("model fallback helpers", () => {
 		);
 	});
 
+	it("plans one runtime probe when every candidate is excluded for a transient provider outage", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+		assert.deepEqual(
+			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
+			["openai/gpt-5-mini"],
+		);
+	});
+
+	it("does not plan a probe for a mixed auth/quota/permanent exclusion set", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "quota exceeded" });
+		assert.throws(
+			() => buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
+			/No usable subagent models remain after registry, scope, and cached-exclusion filtering/,
+		);
+	});
+
+	it("does not plan a probe for rate-limit, request-shape, or explicit-model exclusions", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "429 rate limit" });
+		assert.throws(
+			() => buildModelCandidates("openai/gpt-5-mini", undefined, availableModels),
+			/No usable subagent models remain after registry, scope, and cached-exclusion filtering/,
+		);
+		clearExclusions();
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "invalid_request_error" });
+		assert.throws(
+			() => buildModelCandidates("openai/gpt-5-mini", undefined, availableModels),
+			/No usable subagent models remain after registry, scope, and cached-exclusion filtering/,
+		);
+		clearExclusions();
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		assert.throws(
+			() => buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { origin: "explicit" }),
+			/Requested subagent model 'openai\/gpt-5-mini' is excluded and cannot be replaced by a fallback/,
+		);
+	});
+
+	it("does not let a transient fallback probe mask an unknown configured primary", () => {
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "503 service unavailable" });
+		assert.throws(
+			() => buildModelCandidates("does-not-exist", ["anthropic/claude-sonnet-4"], availableModels),
+			/Unknown subagent model 'does-not-exist'/,
+		);
+	});
+
+	it("does not let a transient primary probe mask an unknown configured fallback", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		assert.throws(
+			() => buildModelCandidates("openai/gpt-5-mini", ["does-not-exist"], availableModels),
+			/Unknown subagent model 'does-not-exist'/,
+		);
+	});
+
 	it("fails closed with a sanitized error when cached exclusions leave zero candidates", () => {
 		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "sk-secret-token-xyz" });
 		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "sk-secret-token-xyz" });

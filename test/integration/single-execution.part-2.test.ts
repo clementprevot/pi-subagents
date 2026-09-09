@@ -63,7 +63,7 @@ import { discardPreservedWorktrees } from "../../src/runs/shared/parallel-handof
 import { createWorktrees } from "../../src/runs/shared/worktree.ts";
 import { resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
-import { clearExclusions, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
+import { clearExclusions, findModelExclusion, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
 import { toSubagentDelegationExecutionParams } from "../../src/slash/delegation-adapters.ts";
 
@@ -2424,6 +2424,77 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.match(result.content[0]?.text ?? "", /Invalid request: malformed payload/u);
 		assert.match(result.details.results[0]?.error ?? "", /Invalid request: malformed payload/u);
 		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("re-probes one transiently excluded model and clears only the successful exclusion", async () => {
+		clearExclusions();
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+		mockPi.onCall({ output: "Recovered live provider" });
+		try {
+			const result = await runSync(tempDir, [makeAgent("worker", {
+				model: "openai/gpt-5-mini", fallbackModels: ["anthropic/claude-sonnet-4"],
+			})], "worker", "Do work", {
+				acceptance: false,
+				runId: "transient-recovery-success",
+				availableModels: [
+					{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+					{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+				],
+			});
+			assert.equal(result.exitCode, 0);
+			assert.equal(mockPi.callCount(), 1);
+			assert.equal(findModelExclusion("openai/gpt-5-mini"), undefined);
+			assert.equal(findModelExclusion("anthropic/claude-sonnet-4")?.reason, "fetch failed");
+		} finally { clearExclusions(); }
+	});
+
+	it("does not try a second excluded model when the real transient recovery probe fails", async () => {
+		clearExclusions();
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+		mockPi.onCall({ stderr: "503 service unavailable", exitCode: 1 });
+		mockPi.onCall({ output: "must not run" });
+		try {
+			const result = await runSync(tempDir, [makeAgent("worker", {
+				model: "openai/gpt-5-mini", fallbackModels: ["anthropic/claude-sonnet-4"],
+			})], "worker", "Do work", {
+				acceptance: false,
+				runId: "transient-recovery-failure",
+				availableModels: [
+					{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+					{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+				],
+			});
+			assert.equal(result.exitCode, 1);
+			assert.match(result.error ?? "", /Transient recovery probe failed; provider remains live-unavailable/);
+			assert.equal(mockPi.callCount(), 1);
+			assert.equal(findModelExclusion("openai/gpt-5-mini")?.reason, "503 service unavailable");
+		} finally { clearExclusions(); }
+	});
+
+	it("fails closed before spawn when every candidate is excluded for a rate limit", async () => {
+		clearExclusions();
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "429 rate limit" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "quota exceeded" });
+		mockPi.onCall({ output: "should not spawn" });
+		try {
+			await assert.rejects(
+				runSync(tempDir, [makeAgent("worker", {
+					model: "openai/gpt-5-mini",
+					fallbackModels: ["anthropic/claude-sonnet-4"],
+				})], "worker", "Do work", {
+					runId: "cached-exclusion-rate-limit",
+					acceptance: false,
+					availableModels: [
+						{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+						{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+					],
+				}),
+				/No usable subagent models remain after registry, scope, and cached-exclusion filtering/,
+			);
+			assert.equal(mockPi.callCount(), 0);
+		} finally { clearExclusions(); }
 	});
 
 	it("fails closed before spawn when cached exclusions leave zero launch candidates", async () => {

@@ -112,7 +112,8 @@ import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTr
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-fanout-budget.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent } from "../shared/nested-events.ts";
-import { formatModelAttemptNote, formatSubagentModelVerificationError, isContextOverflow, isRetryableModelFailureAttempt, recordRetryableModelFailure } from "../shared/model-fallback.ts";
+import { formatModelAttemptNote, formatSubagentModelVerificationError, formatTransientRecoveryProbeFailure, isContextOverflow, isRetryableModelFailureAttempt, recordRetryableModelFailure, TRANSIENT_RECOVERY_PROBE_IN_FLIGHT } from "../shared/model-fallback.ts";
+import { claimTransientModelRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
@@ -1184,7 +1185,13 @@ export async function runSingleStepInner(
 		// Each attempt rewrites the step output log; synchronous appends keep a
 		// retried attempt from interleaving with the previous attempt's flush.
 		fs.writeFileSync(ctx.outputFile, "", "utf-8");
-		const run = await runChildSession(omitUndefinedProperties({
+		const probeClaim = claimTransientModelRecoveryProbe(candidate);
+		if (probeClaim.status === "in-flight") {
+			return omitUndefinedProperties({ agent: step.agent, output: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, error: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, exitCode: 1, context: step.context });
+		}
+		let run: RunChildSessionResult;
+		try {
+			run = await runChildSession(omitUndefinedProperties({
 			factory: ctx.childSessions,
 			launch,
 			collectReadonlyEvidence: true,
@@ -1217,7 +1224,11 @@ export async function runSingleStepInner(
 			modelVerificationRegistry: step.modelVerificationRegistry,
 			modelResponseAliases: step.modelResponseAliases,
 			mutationTools: step.mutationTools,
-		}));
+			}));
+		} catch (error) {
+			releaseTransientModelRecoveryProbe(probeClaim, false);
+			throw error;
+		}
 		// A parked run still owes completion evidence when it actually finishes.
 		// Stopped/timedOut runs already have terminal failures; checking completion evidence there is meaningless.
 		const completionDiagnosticsEligible = !run.interrupted && !run.stopped && !run.timedOut;
@@ -1368,6 +1379,21 @@ export async function runSingleStepInner(
 		});
 		const fileMutationEffect = completionEvidence.fileMutation ?? (missingRequiredOutputAfterMutation ? { status: "observed" as const, expected: completionEvidence.mutationExpected, attempted: true, evidence: mutationEvidence } : undefined);
 		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error, structuredOutput, runtimeAcknowledgedExtensions, ...(step.agentContract ? { agentContract: step.agentContract } : {}), ...(fileMutationEffect || settlementDiagnostic ? { effects: { ...(fileMutationEffect ? { fileMutation: fileMutationEffect } : {}), ...(settlementDiagnostic ? { settlementDiagnostic } : {}) } } : {}) } as RunChildSessionResult;
+		if (probeClaim.status === "claimed") {
+			if (attempt.success) {
+				releaseTransientModelRecoveryProbe(probeClaim, true);
+			} else {
+				if (isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount })) {
+					recordRetryableModelFailure(candidate ?? run.model ?? step.model, error);
+				}
+				releaseTransientModelRecoveryProbe(probeClaim, false);
+				const diagnostic = formatTransientRecoveryProbeFailure(error);
+				attempt.error = diagnostic;
+				finalResult.error = diagnostic;
+				attemptNotes.push(`[fallback] ${diagnostic}`);
+				break modelAttemptsLoop;
+			}
+		}
 		const abortRecovery = !attempt.success ? planAbortRecovery({
 			messages: run.messages,
 			error,

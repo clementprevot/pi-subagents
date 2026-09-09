@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { splitKnownThinkingSuffix } from "../../shared/model-info.ts";
@@ -13,6 +14,20 @@ export type ModelExclusion = ModelExclusionTarget & {
 	recordedAt: number;
 	expiresAt: number;
 };
+
+export interface ModelRecoveryProbe {
+	candidate: string;
+	exclusion: Readonly<ModelExclusion>;
+}
+
+export interface ClaimedModelRecoveryProbe extends ModelRecoveryProbe {
+	owner: string;
+}
+
+export type ModelRecoveryProbeClaim =
+	| { status: "claimed"; probe: ClaimedModelRecoveryProbe }
+	| { status: "in-flight" }
+	| { status: "not-eligible" };
 
 type RecordModelFailureOptions = ModelExclusionTarget & {
 	reason?: string;
@@ -282,6 +297,189 @@ export function findModelExclusion(fullId: string, now = Date.now()): Readonly<M
 	invalidateAuthExclusions();
 	const { provider, modelId } = parseModelKey(fullId);
 	return exclusions.find((entry) => entryMatches(entry, modelId, provider, now));
+}
+
+const NON_RECOVERABLE_PROBE_REASON_PATTERNS = [
+	...AUTH_FAILURE_PATTERNS,
+	/\b(?:401|402|403|429)\b/,
+	/rate\s*limit/i,
+	/request[_\s-]*limit/i,
+	/quota/i,
+	/billing/i,
+	/credit/i,
+	/model.*not found/i,
+	/unknown model/i,
+	/model.*disabled/i,
+	/\b(?:bad[ _]request|invalid[ _]argument|invalid_request_error|invalid request|request validation|malformed payload|invalid config(?:uration)?)\b/i,
+	/\b(?:permission denied|access denied)\b/i,
+];
+const RECOVERABLE_PROBE_REASON_PATTERNS = [
+	/fetch failed/i,
+	/\b(?:connection|network|socket)\b.*\b(?:error|reset|closed|refused|abort(?:ed)?)\b/i,
+	/socket hang up/i,
+	/stream.*(?:abort|ended|closed|reset)/i,
+	/\b(?:timed?\s*out|timeout)\b/i,
+	/overload(?:ed)?/i,
+	/service\s+(?:temporarily\s+)?unavailable/i,
+	/temporar(?:ily)? unavailable/i,
+	/provider\s+(?:temporarily\s+)?unavailable/i,
+	/\bupstream\s+(?:error|timeout|unavailable|overload(?:ed)?|5\d\d)\b/i,
+	/\b(?:500|502|503|504|5xx)\b/i,
+	/internal server error/i,
+	/cold.?start/i,
+	/empty response/i,
+	/produced no output/i,
+];
+
+/** True only for transport/provider-availability exclusions safe to re-probe. */
+export function isReprobeEligibleTransientReason(reason: string | undefined): boolean {
+	if (!reason) return false;
+	return !NON_RECOVERABLE_PROBE_REASON_PATTERNS.some((pattern) => pattern.test(reason))
+		&& RECOVERABLE_PROBE_REASON_PATTERNS.some((pattern) => pattern.test(reason));
+}
+
+/**
+ * Plan one probe only when every supplied candidate is cache-excluded solely
+ * for a re-probe-eligible transient reason. Side-effect free.
+ */
+export function planTransientModelRecoveryProbe(candidates: readonly string[]): ModelRecoveryProbe | undefined {
+	if (candidates.length === 0) return undefined;
+	const matches = candidates.map((candidate) => ({ candidate, exclusion: findModelExclusion(candidate) }));
+	if (!matches.every((match) => match.exclusion && isReprobeEligibleTransientReason(match.exclusion.reason))) return undefined;
+	const first = matches[0]!;
+	return { candidate: first.candidate, exclusion: first.exclusion! };
+}
+
+const PROBE_CLAIM_TTL_MS = 30 * 60_000;
+
+type StoredProbeClaim = { owner: string; pid: number; expiresAt: number };
+
+function recoveryClaimPath(candidate: string): string {
+	return `${getExclusionsFilePath()}.recovery-probe.${Buffer.from(candidate).toString("base64url")}.json`;
+}
+
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ESRCH";
+	}
+}
+
+function readStoredProbeClaim(claimPath: string): StoredProbeClaim | "unreadable" | undefined {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(claimPath, "utf-8");
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "unreadable";
+	}
+	try {
+		const value = JSON.parse(raw) as Partial<StoredProbeClaim>;
+		if (typeof value.owner !== "string" || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0) return undefined;
+		if (typeof value.expiresAt !== "number" || !Number.isFinite(value.expiresAt)) return undefined;
+		return { owner: value.owner, pid: value.pid, expiresAt: value.expiresAt };
+	} catch {
+		return undefined;
+	}
+}
+
+function tryCreateProbeClaim(claimPath: string, owner: string): boolean {
+	let fd: number;
+	try {
+		fd = fs.openSync(claimPath, "wx", 0o600);
+	} catch {
+		return false;
+	}
+	try {
+		fs.writeFileSync(fd, JSON.stringify({
+			version: 1,
+			owner,
+			pid: process.pid,
+			expiresAt: Date.now() + PROBE_CLAIM_TTL_MS,
+		}), "utf-8");
+		fs.fsyncSync(fd);
+		return true;
+	} catch {
+		try { fs.rmSync(claimPath, { force: true }); } catch { /* leave a broken file for the next reclaim */ }
+		return false;
+	} finally {
+		try { fs.closeSync(fd); } catch { /* already closed or never writable */ }
+	}
+}
+
+/**
+ * Exclusive recovery election for one candidate.
+ *
+ * A claim file is required because the exclusion store is a shared cache, not a
+ * lock. Foreground and detached runners can both observe "every candidate is
+ * transiently excluded" and would each send a real provider request. One
+ * O_EXCL/`wx` file next to the store is the existing exclusive-create primitive
+ * (steering and schedule claims). Live PIDs block; dead or malformed files are
+ * reclaimed. No successor chain or /proc identity.
+ */
+export function claimTransientModelRecoveryProbe(candidate: string | undefined): ModelRecoveryProbeClaim {
+	if (!candidate) return { status: "not-eligible" };
+	const planned = planTransientModelRecoveryProbe([candidate]);
+	if (!planned) return { status: "not-eligible" };
+	const claimPath = recoveryClaimPath(candidate);
+	const owner = `${process.pid}-${randomUUID()}`;
+	try {
+		fs.mkdirSync(path.dirname(claimPath), { recursive: true, mode: 0o700 });
+	} catch {
+		return { status: "in-flight" };
+	}
+	if (tryCreateProbeClaim(claimPath, owner)) return { status: "claimed", probe: { ...planned, owner } };
+	const existing = readStoredProbeClaim(claimPath);
+	if (existing === "unreadable") return { status: "in-flight" };
+	if (existing && processIsAlive(existing.pid)) return { status: "in-flight" };
+	try { fs.rmSync(claimPath, { force: true }); } catch { return { status: "in-flight" }; }
+	if (tryCreateProbeClaim(claimPath, owner)) return { status: "claimed", probe: { ...planned, owner } };
+	return { status: "in-flight" };
+}
+
+function sameRecordedExclusion(left: Readonly<ModelExclusion>, right: Readonly<ModelExclusion>): boolean {
+	return left.provider === right.provider
+		&& left.modelId === right.modelId
+		&& left.recordedAt === right.recordedAt
+		&& left.expiresAt === right.expiresAt
+		&& left.reason === right.reason;
+}
+
+function clearRecoveredTransientExclusion(probe: ClaimedModelRecoveryProbe): void {
+	ensureLoaded();
+	const { provider, modelId } = parseModelKey(probe.candidate);
+	const next = exclusions.filter((entry) => !(
+		sameRecordedExclusion(entry, probe.exclusion)
+		&& entryMatches(entry, modelId, provider, Date.now())
+		&& isReprobeEligibleTransientReason(entry.reason)
+	));
+	if (next.length === exclusions.length) return;
+	exclusions = next;
+	flushPersist();
+}
+
+function releaseProbeClaim(probe: ClaimedModelRecoveryProbe): void {
+	const claimPath = recoveryClaimPath(probe.candidate);
+	const existing = readStoredProbeClaim(claimPath);
+	if (!existing || existing === "unreadable" || existing.owner !== probe.owner) return;
+	try { fs.rmSync(claimPath, { force: true }); } catch { /* a leftover file is reclaimed when its PID dies */ }
+}
+
+/** Release ownership. Cleanup errors are swallowed so they cannot discard a finished child. */
+export function releaseTransientModelRecoveryProbe(claim: ModelRecoveryProbeClaim, succeeded: boolean): void {
+	if (claim.status !== "claimed") return;
+	try {
+		if (succeeded) clearRecoveredTransientExclusion(claim.probe);
+	} catch (error) {
+		console.error(`[model-exclusions] Failed to clear recovered exclusion for ${claim.probe.candidate}:`, error);
+	} finally {
+		try {
+			releaseProbeClaim(claim.probe);
+		} catch (error) {
+			console.error(`[model-exclusions] Failed to release recovery probe claim for ${claim.probe.candidate}:`, error);
+		}
+	}
 }
 
 /**

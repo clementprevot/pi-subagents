@@ -13,6 +13,10 @@ import {
 	getExclusionsFilePath,
 	isExcluded,
 	parseModelKey,
+	planTransientModelRecoveryProbe,
+	claimTransientModelRecoveryProbe,
+	releaseTransientModelRecoveryProbe,
+	isReprobeEligibleTransientReason,
 	recordModelFailure,
 	reloadFromDisk,
 	MAX_MODEL_EXCLUSION_TTL_MS,
@@ -90,6 +94,88 @@ describe("model exclusions — record & query", () => {
 		recordModelFailure({ modelId: "gpt-4", provider: "openai" });
 		recordModelFailure({ modelId: "claude", provider: "anthropic" });
 		assert.equal(getExcludedCount(), 2);
+	});
+});
+
+describe("model exclusions — transient recovery probes", () => {
+	it("classifies only narrow transient transport/provider reasons", () => {
+		for (const reason of ["fetch failed", "socket hang up", "request timed out", "503 service unavailable", "upstream 502", "cold-start empty response"]) {
+			assert.equal(isReprobeEligibleTransientReason(reason), true, reason);
+		}
+		for (const reason of ["upstream", "invalid api key", "401 unauthorized", "429 rate limit", "quota exceeded", "model not found", "model disabled", "invalid_request_error", "invalid request: upstream 503", "permission denied: 503", "access denied: upstream 5xx", "invalid configuration"]) {
+			assert.equal(isReprobeEligibleTransientReason(reason), false, reason);
+		}
+	});
+
+	it("plans and atomically owns one probe only when every candidate is transiently excluded", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "fetch failed" });
+		assert.equal(planTransientModelRecoveryProbe(["openai/gpt-4", "anthropic/claude"])?.candidate, "openai/gpt-4");
+		const first = claimTransientModelRecoveryProbe("openai/gpt-4");
+		assert.equal(first.status, "claimed");
+		assert.equal(claimTransientModelRecoveryProbe("openai/gpt-4").status, "in-flight");
+		releaseTransientModelRecoveryProbe(first, true);
+		assert.equal(findModelExclusion("openai/gpt-4"), undefined);
+		assert.equal(findModelExclusion("anthropic/claude")?.reason, "fetch failed");
+	});
+
+	it("does not plan a probe for mixed or permanent exclusions and preserves failed probes", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+		recordModelFailure({ modelId: "claude", provider: "anthropic", reason: "quota exceeded" });
+		assert.equal(planTransientModelRecoveryProbe(["openai/gpt-4", "anthropic/claude"]), undefined);
+		assert.equal(planTransientModelRecoveryProbe(["openai/gpt-4"])?.candidate, "openai/gpt-4");
+		const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
+		releaseTransientModelRecoveryProbe(claim, false);
+		assert.equal(findModelExclusion("openai/gpt-4")?.reason, "503 service unavailable");
+	});
+
+	it("clears only the exact provider/model target when immutable metadata collides", () => {
+		const now = Date.now();
+		fs.writeFileSync(getExclusionsFilePath(), JSON.stringify({ version: 1, exclusions: [
+			{ provider: "openai", reason: "503", recordedAt: now, expiresAt: now + 60_000 },
+			{ provider: "openai", modelId: "gpt-4", reason: "503", recordedAt: now, expiresAt: now + 60_000 },
+		] }), "utf-8");
+		reloadFromDisk();
+		const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
+		assert.equal(claim.status, "claimed");
+		releaseTransientModelRecoveryProbe(claim, true);
+		reloadFromDisk();
+		assert.equal(findModelExclusion("openai/gpt-4")?.modelId, "gpt-4");
+	});
+
+	it("reclaims a dead-pid claim and never steals a live process even after expiry", () => {
+		recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+		const candidate = "openai/gpt-4";
+		const claimPath = `${getExclusionsFilePath()}.recovery-probe.${Buffer.from(candidate).toString("base64url")}.json`;
+		fs.writeFileSync(claimPath, JSON.stringify({ owner: "dead", pid: 999_999_999, expiresAt: Date.now() - 1 }), "utf-8");
+		const reclaimed = claimTransientModelRecoveryProbe(candidate);
+		assert.equal(reclaimed.status, "claimed");
+		releaseTransientModelRecoveryProbe(reclaimed, false);
+		fs.writeFileSync(claimPath, JSON.stringify({ owner: "live", pid: process.pid, expiresAt: Date.now() - 1 }), "utf-8");
+		assert.equal(claimTransientModelRecoveryProbe(candidate).status, "in-flight");
+		fs.rmSync(claimPath, { force: true });
+	});
+
+	it("does not throw when successful-probe cleanup cannot persist", () => {
+		const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-probe-cleanup-"));
+		const isolated = path.join(isolatedRoot, "nested", "exclusions.json");
+		const previous = process.env.PI_MODEL_EXCLUSIONS_PATH;
+		process.env.PI_MODEL_EXCLUSIONS_PATH = isolated;
+		try {
+			reloadFromDisk();
+			recordModelFailure({ modelId: "gpt-4", provider: "openai", reason: "503 service unavailable" });
+			const claim = claimTransientModelRecoveryProbe("openai/gpt-4");
+			assert.equal(claim.status, "claimed");
+			const parent = path.dirname(isolated);
+			fs.rmSync(parent, { recursive: true, force: true });
+			fs.writeFileSync(parent, "not-a-directory");
+			assert.doesNotThrow(() => releaseTransientModelRecoveryProbe(claim, true));
+		} finally {
+			if (previous === undefined) delete process.env.PI_MODEL_EXCLUSIONS_PATH;
+			else process.env.PI_MODEL_EXCLUSIONS_PATH = previous;
+			fs.rmSync(isolatedRoot, { recursive: true, force: true });
+			reloadFromDisk();
+		}
 	});
 });
 

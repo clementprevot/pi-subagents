@@ -23,6 +23,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Re-probe one cached model after a transient transport/provider outage only when every launch candidate is excluded for a recoverable availability reason. Foreground and detached runners take a single exclusive claim file, clear only a successful probe's matching exclusion, and keep auth, quota, rate-limit, request-shape, explicit-model, configuration, and model-scope failures fail-closed. Thanks to [@VladimirGVP](https://github.com/VladimirGVP) for #2119.
 - Do not abort a native child during final-stop drain after queued steering or follow-up is observed, even if Pi drains that input before a delayed `turn_start`. Related to #2117; thanks to [@yanqianglu](https://github.com/yanqianglu) for #2057.
 - Fail review and scout launches closed when a requested, still-permitted repository tool is missing from the host runtime, and classify that gap as a lane infrastructure failure instead of a completed review. Intentionally empty or ceiling-restricted allowlists stay valid. Remaining #2058 residual; thanks to [@nicobailon](https://github.com/nicobailon).
 - Apply the same project-local refinement overlay during launch-contract preflight that foreground execution already injects, so `launchContractDigest` matches the completed terminal. Thanks to [@Yivas](https://github.com/Yivas) for #2112.

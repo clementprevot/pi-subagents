@@ -80,10 +80,13 @@ import {
 	buildModelCandidates,
 	formatSubagentModelVerificationError,
 	formatModelAttemptNote,
+	formatTransientRecoveryProbeFailure,
 	isContextOverflow,
 	isRetryableModelFailureAttempt,
 	recordRetryableModelFailure,
+	TRANSIENT_RECOVERY_PROBE_IN_FLIGHT,
 } from "../shared/model-fallback.ts";
+import { claimTransientModelRecoveryProbe, releaseTransientModelRecoveryProbe } from "../shared/model-exclusions.ts";
 import {
 	createMutatingFailureState,
 	didMutatingToolFail,
@@ -1962,7 +1965,18 @@ async function runSyncCompletionInner(
 			const verifyModel = Boolean(candidate) && !(options.modelOverrideFromParent && modelIndex === 0);
 			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 			if (recoveryState === "readonly-continuation") attemptOptions.deadlineAt = continuationDeadline;
-			const result = await runSingleAttempt(runtimeCwd, agent, attemptTask, candidate, attemptOptions, {
+			const probeClaim = claimTransientModelRecoveryProbe(candidate);
+			if (probeClaim.status === "in-flight") {
+				lastResult = withRunContext({
+					index: options.index ?? 0, agent: agent.name, task, exitCode: 1, messages: [], usage: emptyUsage(),
+					error: TRANSIENT_RECOVERY_PROBE_IN_FLIGHT, model: candidate,
+				}, options.context);
+				attemptNotes.push(`[fallback] ${TRANSIENT_RECOVERY_PROBE_IN_FLIGHT}`);
+				break modelAttemptsLoop;
+			}
+			let result: SingleResult;
+			try {
+				result = await runSingleAttempt(runtimeCwd, agent, attemptTask, candidate, attemptOptions, {
 				sessionEnabled,
 				systemPrompt,
 				acceptancePrompt,
@@ -1983,7 +1997,11 @@ async function runSyncCompletionInner(
 				readonlyExpected,
 				readonlyModel,
 				readonlyHandoffAllowed: readonlyExpected ? readonlyHandoffAllowed : undefined,
-			});
+				});
+			} catch (error) {
+				releaseTransientModelRecoveryProbe(probeClaim, false);
+				throw error;
+			}
 			lastResult = result;
 			if (!recoveringAbort) {
 				if (result.model) attemptedModels.push(result.model);
@@ -1993,6 +2011,7 @@ async function runSyncCompletionInner(
 			totalToolCount += result.progressSummary?.toolCount ?? 0;
 			totalDurationMs += result.progressSummary?.durationMs ?? 0;
 			const attemptSucceeded = result.exitCode === 0 && !result.error;
+			if (probeClaim.status === "claimed" && attemptSucceeded) releaseTransientModelRecoveryProbe(probeClaim, true);
 			const attempt: ModelAttempt = {
 				model: result.model ?? candidate ?? agent.model ?? "default",
 				success: attemptSucceeded,
@@ -2001,6 +2020,16 @@ async function runSyncCompletionInner(
 				usage: { ...result.usage },
 			};
 			modelAttempts.push(attempt);
+			if (probeClaim.status === "claimed" && !attemptSucceeded) {
+				if (isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount })) {
+					recordRetryableModelFailure(result.model ?? candidate, result.error);
+				}
+				releaseTransientModelRecoveryProbe(probeClaim, false);
+				result.error = formatTransientRecoveryProbeFailure(result.error);
+				attempt.error = result.error;
+				attemptNotes.push(`[fallback] ${result.error}`);
+				break modelAttemptsLoop;
+			}
 			if (options.sshProject) break modelAttemptsLoop;
 			// A consumed retained continuation is terminal even on a startup error or abort.
 			if (recoveryState === "readonly-continuation") break modelAttemptsLoop;
