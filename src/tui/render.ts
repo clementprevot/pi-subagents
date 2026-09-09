@@ -2749,6 +2749,15 @@ const asyncWidgetUpdates = new WeakMap<ExtensionContext["ui"], (jobs: AsyncJobSt
 const inlineWorkflowCoverage = new WeakMap<ExtensionContext["ui"], ReadonlyMap<string, string>>();
 const asyncWidgetInvalidations = new WeakMap<ExtensionContext["ui"], () => void>();
 
+/** Include child identity and freshness in the roster's existing snapshot. */
+export function inlineWorkflowRenderKey(job: AsyncJobState, children: AsyncJobState[]): string {
+	if (!children.length) return widgetRenderKey(job);
+	return JSON.stringify([widgetRenderKey(job), children.map((child) => [
+		child.asyncId, widgetRenderKey(child, true), child.context,
+		child.steps?.map((step) => [Boolean(step.runner), step.tokens?.window]), Boolean(child.workflowGraph),
+	])]);
+}
+
 /** Presentation-only coverage from the mounted inline Fleet roster, never configuration. */
 export function setInlineWorkflowCoverage(ui: ExtensionContext["ui"], coverage: ReadonlyMap<string, string>): void {
 	const previous = inlineWorkflowCoverage.get(ui);
@@ -2783,8 +2792,8 @@ function widgetChecklistWithoutMaterializedChildren(projection: WorkflowWidgetPr
 }
 
 function materializedWidgetChildLines(job: AsyncJobState, theme: Theme, width: number, expanded: boolean, frame: number | undefined, projectionFor: WorkflowWidgetProjectionLookup): string[] {
-	const children = projectionFor(job).children;
-	if (!children?.length) return [];
+	const { children, inlineFleetCovered } = projectionFor(job);
+	if (inlineFleetCovered || !children?.length) return [];
 	const lines: string[] = [];
 	const shown = orderedWidgetJobs(children).slice(0, MAX_WIDGET_JOBS);
 	for (const [index, child] of shown.entries()) {
@@ -2831,9 +2840,23 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 			const frame = Math.floor(now / WIDGET_ANIMATION_INTERVAL_MS);
 			const expanded = ui.getToolsExpanded?.() ?? false;
 			const coverage = inlineWorkflowCoverage.get(ui);
-			const covered = new Set(jobs.filter((job) => coverage?.has(job.asyncId)
-				&& !jobs.some((child) => child.parentWorkflowRunId === job.asyncId)
-				&& coverage.get(job.asyncId) === widgetRenderKey(job)).map((job) => job.asyncId));
+			const covered = new Set<string>();
+			if (coverage?.size) {
+				const childrenByParent = new Map<string, AsyncJobState[]>();
+				for (const child of jobs) {
+					if (!child.parentWorkflowRunId) continue;
+					const children = childrenByParent.get(child.parentWorkflowRunId) ?? [];
+					children.push(child);
+					childrenByParent.set(child.parentWorkflowRunId, children);
+				}
+				for (const job of jobs) {
+					const snapshot = coverage.get(job.asyncId);
+					if (snapshot === undefined) continue;
+					const children = childrenByParent.get(job.asyncId) ?? [];
+					if (!children.some((child) => childrenByParent.has(child.asyncId))
+						&& snapshot === inlineWorkflowRenderKey(job, children)) covered.add(job.asyncId);
+				}
+			}
 			const coverageKey = JSON.stringify([...covered]);
 			if (cachedLines && cachedRenderWidth === renderWidth && cachedFrame === frame && cachedExpanded === expanded && cachedCoverage === coverageKey) return cachedLines;
 			if (cachedCoverage !== coverageKey) resetWidgetLayoutSession();

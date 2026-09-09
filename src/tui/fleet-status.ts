@@ -8,7 +8,7 @@ import { contextModeLabel } from "../runs/shared/context-mode.ts";
 import { formatWorkflowJsonPreview } from "../workflows/scripted-workflow.ts";
 import { hostStepReportName, hostStepVerdictLabel } from "../runs/shared/host-step-status.ts";
 import { isStaleExtensionContextError } from "../shared/extension-context.ts";
-import { widgetRenderKey } from "./render.ts";
+import { inlineWorkflowRenderKey } from "./render.ts";
 import { formatWorkflowChecklistBottleneck, formatWorkflowChecklistPhase, formatWorkflowChecklistSummary, projectWorkflowChecklist, type WorkflowChecklistPhase, type WorkflowChecklistProjection } from "../workflows/workflow-checklist.ts";
 
 export const FLEET_STATUS_WIDGET_KEY = "subagent-fleet-status";
@@ -529,7 +529,7 @@ export class SubagentFleetStatus {
 	private inspectorOpen = false;
 	private lastRenderKey = "";
 	private entries: FleetStatusEntry[] = [];
-	private workflowSnapshots = new Map<string, string>();
+	private workflowSnapshots = new Map<string, { snapshot: string; childRows: Set<string> }>();
 	private readonly onWorkflowCoverageChange: FleetStatusOptions["onWorkflowCoverageChange"];
 	private readonly state: SubagentState;
 	private readonly openInspector: (itemKey: string) => Promise<void> | void;
@@ -592,16 +592,49 @@ export class SubagentFleetStatus {
 		}
 		this.entries = collectFleetStatusEntries(this.state);
 		this.workflowSnapshots.clear();
-		if (this.active && this.onWorkflowCoverageChange) {
-			const parents = new Set([...this.state.asyncJobs.values()].map((job) => job.parentWorkflowRunId));
-			const attachedOwners = new Set(this.entries.map((entry) => entry.parentKey));
+		if (this.active && !this.inspectorOpen && !this.state.fleetInspectorOpen && this.onWorkflowCoverageChange) {
+			const childrenByParent = new Map<string, AsyncJobState[]>();
+			for (const child of this.state.asyncJobs.values()) {
+				if (!child.parentWorkflowRunId) continue;
+				const children = childrenByParent.get(child.parentWorkflowRunId) ?? [];
+				children.push(child);
+				childrenByParent.set(child.parentWorkflowRunId, children);
+			}
+			const attachedByParent = new Map<string, FleetStatusEntry[]>();
+			for (const entry of this.entries) {
+				if (!entry.parentKey) continue;
+				const attached = attachedByParent.get(entry.parentKey) ?? [];
+				attached.push(entry);
+				attachedByParent.set(entry.parentKey, attached);
+			}
 			for (const job of this.state.asyncJobs.values()) {
 				// Fleet does not expand attached workflow wrappers or step descendants.
 				// Unknown/unsupported coverage deliberately retains the async tree.
-				if (job.mode !== "workflow" || !isActiveState(job.status) || job.parentWorkflowRunId || parents.has(job.asyncId)
-					|| job.nestedChildren?.length || job.steps?.some((step) => step.children?.length)
-					|| attachedOwners.has(`async:${job.asyncId}`)) continue;
-				this.workflowSnapshots.set(`async:${job.asyncId}`, widgetRenderKey(job));
+				if (job.mode !== "workflow" || !isActiveState(job.status) || job.parentWorkflowRunId
+					|| job.nestedChildren?.length || job.steps?.some((step) => step.children?.length)) continue;
+				const key = `async:${job.asyncId}`;
+				const children = childrenByParent.get(job.asyncId) ?? [];
+				const attached = attachedByParent.get(key) ?? [];
+				if (children.length && job.status !== "running") continue;
+				// Even without workflow rows, these children plus their owner cannot fit.
+				if (attached.length >= this.maxAgentRows) continue;
+				const rowKeys = new Set<string>();
+				let unsupported = false;
+				for (const child of children) {
+					if (!isActiveState(child.status) || (child.mode !== "single" && child.mode !== "parallel" && child.mode !== "chain")
+						|| child.hostSteps?.length || child.workflowGraph
+						|| childrenByParent.has(child.asyncId) || child.nestedChildren?.length
+						|| child.steps?.some((step) => step.children?.length || step.runner || !isActiveState(step.status))) {
+						unsupported = true; break;
+					}
+					const count = child.steps?.length || child.agents?.length || 0;
+					if (!count || (child.stepsTotal ?? 0) > count || (child.chainStepCount ?? 0) > count) {
+						unsupported = true; break;
+					}
+					for (let index = 0; index < count; index++) rowKeys.add(`async:${child.asyncId}:${child.steps?.[index]?.index ?? index}`);
+				}
+				if (unsupported || attached.length !== rowKeys.size || attached.some((entry) => !rowKeys.has(entry.key))) continue;
+				this.workflowSnapshots.set(key, { snapshot: inlineWorkflowRenderKey(job, children), childRows: rowKeys });
 			}
 		}
 		this.clampSelection();
@@ -777,17 +810,20 @@ export class SubagentFleetStatus {
 		if (hiddenBelow > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more`), width));
 		if (this.ui && this.widgetRegistered && this.onWorkflowCoverageChange) {
 			const coverage = new Map<string, string>();
-			for (const [key, snapshot] of this.workflowSnapshots) {
+			for (const [key, { snapshot, childRows }] of this.workflowSnapshots) {
 				const ownerIndex = tree.findIndex((row) => row.kind === "owner" && row.entry.key === key);
 				const owner = tree[ownerIndex];
 				if (owner?.kind !== "owner" || ownerIndex < start) continue;
-				const count = (owner.entry.workflowRows?.length ?? 0) + (owner.entry.workflowChecklist?.phases.length ?? 0);
+				const count = childRows.size + (owner.entry.workflowRows?.length ?? 0) + (owner.entry.workflowChecklist?.phases.length ?? 0);
 				if (!count || ownerIndex + count >= start + visibleCount) continue;
 				const descendants = tree.slice(ownerIndex + 1, ownerIndex + count + 1);
 				if (!descendants.every((row) => (row.kind === "workflow" && row.ownerKey === key && !row.row.overflow
 					&& visibleWidth(this.renderWorkflowRow(row.row, row.last, Infinity, theme)) <= width)
 					|| (row.kind === "workflow-phase" && row.ownerKey === key
-						&& visibleWidth(this.renderWorkflowPhaseRow(row.phase, row.last, Infinity, theme)) <= width))) continue;
+						&& visibleWidth(this.renderWorkflowPhaseRow(row.phase, row.last, Infinity, theme)) <= width)
+					|| (row.kind === "child" && childRows.has(row.entry.key)
+						&& visibleWidth(this.renderEntry(rosterIndexByKey.get(row.entry.key) ?? 0, selectedIndex, row.entry, 0, theme, row.last ? "└─" : "├─", true)) <= width))) continue;
+				if (childRows.size && visibleWidth(this.renderEntry(rosterIndexByKey.get(key) ?? 0, selectedIndex, owner.entry, 0, theme, undefined, true)) > width) continue;
 				coverage.set(key.slice("async:".length), snapshot);
 			}
 			this.onWorkflowCoverageChange(this.ui, coverage);
@@ -807,7 +843,7 @@ export class SubagentFleetStatus {
 	}
 
 
-	private renderEntry(rosterIndex: number, selectedIndex: number, entry: FleetStatusEntry, width: number, theme: Theme, branch?: string): string {
+	private renderEntry(rosterIndex: number, selectedIndex: number, entry: FleetStatusEntry, width: number, theme: Theme, branch?: string, unclipped = false): string {
 		const label = entry.displayLabel ?? entry.agent;
 		const agent = entry.modelThinking ? `${label} (${entry.modelThinking})` : label;
 		const prefix = branch ? `    ${branch}` : " ";
@@ -820,6 +856,7 @@ export class SubagentFleetStatus {
 			? `${entry.projectPane.summary ?? "—"} · ${formatFleetElapsed(Date.now() - entry.projectPane.refreshedAt)} ago`
 				: entry.external ? formatFleetElapsed(elapsed) : `${formatFleetElapsed(elapsed)} · ${entry.workflowWrapper ? "usage on child rows" : formatFleetTokens(entry.tokens, entry.window)}`;
 		const right = theme.fg("dim", rightText);
+		if (unclipped) return `${left} ${right}`;
 		return rightAlign(left, right, width);
 	}
 
