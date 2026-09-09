@@ -8,11 +8,17 @@ import { fileURLToPath } from "node:url";
 import { parseSshEntrySelection, validateSshEntrySelection, sshStockCliArgs } from "../../src/runs/shared/ssh-cli-entry.ts";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const tmpRoot = path.join(repo, "tmp");
 const sdkRoot = process.env.PI_SUBAGENTS_REAL_SDK_ROOT ?? "/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent";
 const available = fs.existsSync(path.join(sdkRoot, "dist/bundle/cli.js"));
 
+function createRepoTempDir(prefix: string): string {
+	fs.mkdirSync(tmpRoot, { recursive: true });
+	return fs.mkdtempSync(path.join(tmpRoot, prefix));
+}
+
 test("npm-installed SSH launcher loads TypeScript without NODE_OPTIONS", { timeout: 60_000 }, () => {
-	const root = fs.mkdtempSync(path.join(repo, "tmp/ssh-installed-"));
+	const root = createRepoTempDir("ssh-installed-");
 	const installed = path.join(root, "node_modules/pi-subagents");
 	const home = path.join(root, "home"), agentDir = path.join(home, ".pi/agent");
 	fs.mkdirSync(home, { recursive: true });
@@ -56,7 +62,7 @@ test("npm-installed SSH launcher loads TypeScript without NODE_OPTIONS", { timeo
 });
 
 test("stock CLI SSH foreground: first child model request, owned read/bash, public delegation, local identity", { skip: !available, timeout: 90_000 }, () => {
-	const root = fs.mkdtempSync(path.join(repo, "tmp/ssh-full-"));
+	const root = createRepoTempDir("ssh-full-");
 	const home = path.join(root, "home"), agentDir = path.join(home, ".pi/agent"), unrelated = path.join(root, "unrelated");
 	fs.mkdirSync(agentDir, { recursive: true }); fs.mkdirSync(unrelated);
 	fs.writeFileSync(path.join(unrelated, "AGENTS.md"), "UNRELATED_LOCAL_PROJECT");
