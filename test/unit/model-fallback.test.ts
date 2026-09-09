@@ -412,10 +412,12 @@ describe("model fallback helpers", () => {
 	it("plans one runtime probe when every candidate is excluded for a transient provider outage", () => {
 		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "503 service unavailable" });
 		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "fetch failed" });
+		const recovery = { planned: false };
 		assert.deepEqual(
-			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
+			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { recovery }),
 			["openai/gpt-5-mini"],
 		);
+		assert.equal(recovery.planned, true);
 	});
 
 	it("does not plan a probe for a mixed auth/quota/permanent exclusion set", () => {
