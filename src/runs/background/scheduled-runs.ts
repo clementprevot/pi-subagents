@@ -464,11 +464,6 @@ function executionParams(schedule: ScheduleRecord, quiet = false): SubagentParam
 	};
 }
 
-function launchIsQuiet(schedule: ScheduleRecord, dueReason: ScheduleRunRecord["dueReason"], explicitQuiet?: boolean): boolean {
-	if (explicitQuiet === true) return true;
-	return dueReason !== "manual" && schedule.trigger.kind === "interval" && schedule.quiet === true;
-}
-
 function snapshotContext(ctx: ExtensionContext, cwd: string): ExtensionContext {
 	const source = ctx.sessionManager;
 	const sessionId = source.getSessionId();
@@ -861,7 +856,7 @@ export class ScheduledRunManager {
 		store.write(schedule);
 		store.writeRun(schedule, run, "schedule.run.started");
 		try {
-			const result = await this.deps.launch(executionParams(schedule, launchIsQuiet(schedule, dueReason, explicitQuiet)), this.requireContext(store), new AbortController().signal);
+			const result = await this.deps.launch(executionParams(schedule, dueReason === "manual" ? explicitQuiet === true : schedule.quiet === true), this.requireContext(store), new AbortController().signal);
 			const asyncId = result.details?.asyncId ?? result.details?.runId;
 			if (result.isError || !asyncId) throw new Error(result.content.find((item) => item.type === "text")?.text ?? "Scheduled launch failed.");
 			run.asyncId = asyncId;

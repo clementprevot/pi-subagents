@@ -686,26 +686,12 @@ describe("quiet schedules", () => {
 		const created = await h.manager.handleToolCall({ action: "schedule.create", id: "once", at: "+10m", workflowScript: script }, h.ctx);
 		assert.equal(created.isError, undefined);
 		assert.equal("quiet" in detailRecords(created)[0]!, false);
-		const file = path.join(scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores")), "once", "schedule.json");
-		const record = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, unknown>;
-		fs.writeFileSync(file, JSON.stringify({ ...record, quiet: true }));
 
-		h.manager.stop();
-		const launches: Launch[] = [];
-		const timers = new FakeTimers();
-		const manager = createScheduledRunManager({
-			config: { scheduledRuns: { enabled: true } },
-			storeRoot: path.join(h.root, "stores"),
-			now: () => h.clock.now,
-			timers,
-			launch: (params, launchCtx) => new Promise((resolve) => launches.push({ params: params as Record<string, unknown>, ctx: launchCtx, resolve: resolve as Launch["resolve"] })) as never,
-		});
-		manager.bindSession(h.ctx);
 		h.clock.now += 10 * 60_000;
-		timers.fireAll();
+		h.timers.fireAll();
 		await flush();
-		assert.equal(launches.length, 1);
-		assert.equal("quiet" in (launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
+		assert.equal(h.launches.length, 1);
+		assert.equal("quiet" in (h.launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
 	});
 
 	it("keeps schedule.run noisy unless that launch asks for quiet", async () => {
