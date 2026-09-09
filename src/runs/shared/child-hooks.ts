@@ -17,7 +17,9 @@ export interface ChildHookExtension {
 	factory: (pi: ExtensionAPI) => void;
 }
 
-type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements" | "backgroundDrain" | "runtimeState">>;
+type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements" | "backgroundDrain">> & {
+	runtimeState: NonNullable<ChildRuntimeConfig["runtimeState"]>;
+};
 type PromptProof = { config: ChildRuntimeConfig; snapshot: string; factories?: ChildHookExtension["factory"][]; observeNext?: ReadonlyDrainObservation; observation?: ReadonlyDrainObservation; capture?: OwnedCapture; reporting?: { launch: ChildSessionLaunch; callback: ChildSessionLaunch["onExtensionError"] } };
 const promptProofs = new WeakMap<ChildHookExtension["factory"], PromptProof>();
 
@@ -61,14 +63,14 @@ function readonlyConfig(config: ChildRuntimeConfig, capture?: OwnedCapture): str
 	const booleans = ["inheritProjectContext", "inheritGlobalContext", "inheritSkills"];
 	const keys = dataKeys(config);
 	if (!keys) return undefined;
-	if (capture && (config.toolDiagnostic !== capture.toolDiagnostic || config.runtimeAcknowledgements !== capture.runtimeAcknowledgements || config.backgroundDrain !== capture.backgroundDrain || config.runtimeState !== capture.runtimeState)) return undefined;
+	if (capture && (config.toolDiagnostic !== capture.toolDiagnostic || config.runtimeAcknowledgements !== capture.runtimeAcknowledgements || config.backgroundDrain !== capture.backgroundDrain)) return undefined;
 	const waitKeys = dataKeys(config.waitTool);
 	if (!waitKeys || waitKeys.some((key) => key !== "enabled")) return undefined;
 	if (config.fast !== false || config.fanoutChild !== false || config.waitTool.enabled !== false) return undefined;
 	for (const key of keys) {
 		const value = Object.getOwnPropertyDescriptor(config, key)!.value;
 		if (["fast", "fanoutChild", "waitTool"].includes(key)) continue;
-		if (capture && (key === "toolDiagnostic" || key === "runtimeAcknowledgements" || key === "backgroundDrain" || key === "runtimeState")) continue;
+		if (capture && (key === "toolDiagnostic" || key === "runtimeAcknowledgements" || key === "backgroundDrain")) continue;
 		if (capture && key === "requiredTools" && Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype) {
 			const descriptors = Object.getOwnPropertyDescriptors(value);
 			if (Reflect.ownKeys(descriptors).length !== value.length + 1) return undefined;
@@ -146,7 +148,11 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 		} }),
 		runtimeState: createChildSafeState(),
 	};
-	Object.assign(config, capture);
+	Object.assign(config, {
+		toolDiagnostic: capture.toolDiagnostic,
+		runtimeAcknowledgements: capture.runtimeAcknowledgements,
+		backgroundDrain: capture.backgroundDrain,
+	});
 	const hooks = childHooks(config, capture);
 	if (runner) {
 		hooks.push({ name: "pi-subagents:completion-intent", factory: (pi) => pi.on("session_start", (_event, childCtx) => {
@@ -177,12 +183,13 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHookExtension[] {
 	const snapshot = readonlyConfig(config, capture);
 	const proof: PromptProof | undefined = snapshot === undefined ? undefined : { config, snapshot, capture };
+	const runtime = capture ? { ...config, runtimeState: capture.runtimeState } : config;
 	const hooks: ChildHookExtension[] = [
 		{ name: "pi-subagents:prompt-runtime", factory: function promptRuntime(pi) {
-			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, config);
+			if (!proof?.observeNext) return registerSubagentPromptRuntime(pi, runtime);
 			proof.observation = proof.observeNext;
 			proof.observeNext = undefined;
-			registerSubagentPromptRuntime(pi, config, proof.observation);
+			registerSubagentPromptRuntime(pi, runtime, proof.observation);
 		} },
 	];
 	if (proof) {
@@ -190,6 +197,6 @@ function childHooks(config: ChildRuntimeConfig, capture?: OwnedCapture): ChildHo
 		promptProofs.set(hooks[0]!.factory, proof);
 	}
 	if (config.fast) hooks.push({ name: "pi-subagents:fast-mode", factory: (pi) => registerSubagentFastModeExtension(pi) });
-	if (config.fanoutChild) hooks.push({ name: "pi-subagents:fanout-child", factory: (pi) => registerFanoutChildSubagentExtension(pi, config) });
+	if (config.fanoutChild) hooks.push({ name: "pi-subagents:fanout-child", factory: (pi) => registerFanoutChildSubagentExtension(pi, runtime) });
 	return hooks;
 }
