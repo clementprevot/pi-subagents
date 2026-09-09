@@ -455,10 +455,11 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 	registerPermissionGate(pi, config.permissions, config.childWatchdog);
 	registerToolBudget(pi, config.toolBudget);
 	registerChildWatchdog(pi, config.childWatchdog, config.watchdogStatus);
-	const waitState = {
+	const waitState = config.runtimeState ?? {
 		baseCwd: "",
 		currentSessionId: null,
 		asyncJobs: new Map(),
+		foregroundRuns: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		cleanupTimers: new Map(),
@@ -469,6 +470,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 		watcherRestartTimer: null,
 		resultFileCoalescer: { schedule: () => false, clear: () => {} },
 	} as unknown as SubagentState;
+	waitState.foregroundRuns ??= new Map();
 	if (typeof pi.registerTool === "function") registerWaitTool(pi, waitState, config.waitTool.enabled, undefined, config.waitTool.defaultTimeoutMs, { nestedRootRunId: config.nestedRoute?.rootRunId });
 	const pendingRuns = new Set<string>();
 	let delegationCalls = 0;
@@ -509,7 +511,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 		if (result.toolName === "bg_wait") acknowledge(result.details);
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
-		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) { drainObservation?.deny(); return; }
+		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) drainObservation?.deny();
 		if (drainObservation) {
 			try {
 				if ((ctx as ExtensionContext)?.sessionManager?.getSessionFile() !== waitState.currentSessionId) drainObservation.deny();

@@ -803,6 +803,51 @@ describe("bg_wait tool", () => {
 		}
 	});
 
+	it("waits for session-owned detached foreground runs when all is true", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-foreground-all-"));
+		try {
+			const state = makeState("sess-1");
+			state.foregroundRuns = new Map([
+				["foreground-alpha", {
+					runId: "foreground-alpha",
+					mode: "single",
+					cwd: root,
+					sessionId: "sess-1",
+					updatedAt: 1,
+					children: [{ agent: "reviewer", index: 0, status: "detached", updatedAt: 1 }],
+				}],
+				["foreground-other", {
+					runId: "foreground-other",
+					mode: "single",
+					cwd: root,
+					sessionId: "sess-2",
+					updatedAt: 1,
+					children: [{ agent: "worker", index: 0, status: "detached", updatedAt: 1 }],
+				}],
+			]);
+			let polls = 0;
+			const result = await waitForSubagents({ all: true }, undefined, baseDeps(root, state, {
+				sleep: async () => {
+					polls += 1;
+					state.foregroundRuns!.get("foreground-alpha")!.children[0] = {
+						agent: "reviewer",
+						index: 0,
+						status: "completed",
+						finalOutput: "Recovered review",
+						updatedAt: 2,
+					};
+				},
+			}));
+			assert.equal(result.isError, undefined);
+			assert.match(textOf(result), /remembered detached foreground run "foreground-alpha"/i);
+			assert.match(textOf(result), /1 completed/);
+			assert.equal(polls, 1);
+			assert.equal(state.foregroundRuns.get("foreground-other")!.children[0]!.status, "detached");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("waits for a remembered detached foreground run by id and ignores other sessions", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-foreground-"));
 		try {

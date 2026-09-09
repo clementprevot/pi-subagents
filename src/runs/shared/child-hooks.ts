@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { listBackgroundWorkProviders } from "../../api/background-work.ts";
 import { ReadonlyDrainObservation } from "./readonly-drain-observation.ts";
-import registerFanoutChildSubagentExtension from "../../extension/fanout-child.ts";
+import registerFanoutChildSubagentExtension, { createChildSafeState } from "../../extension/fanout-child.ts";
 import registerSubagentFastModeExtension from "./fast-mode-extension.ts";
 import registerSubagentPromptRuntime from "./subagent-prompt-runtime.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
@@ -17,7 +17,7 @@ export interface ChildHookExtension {
 	factory: (pi: ExtensionAPI) => void;
 }
 
-type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements" | "backgroundDrain">>;
+type OwnedCapture = Required<Pick<ChildRuntimeConfig, "toolDiagnostic" | "runtimeAcknowledgements" | "backgroundDrain" | "runtimeState">>;
 type PromptProof = { config: ChildRuntimeConfig; snapshot: string; factories?: ChildHookExtension["factory"][]; observeNext?: ReadonlyDrainObservation; observation?: ReadonlyDrainObservation; capture?: OwnedCapture; reporting?: { launch: ChildSessionLaunch; callback: ChildSessionLaunch["onExtensionError"] } };
 const promptProofs = new WeakMap<ChildHookExtension["factory"], PromptProof>();
 
@@ -61,14 +61,14 @@ function readonlyConfig(config: ChildRuntimeConfig, capture?: OwnedCapture): str
 	const booleans = ["inheritProjectContext", "inheritGlobalContext", "inheritSkills"];
 	const keys = dataKeys(config);
 	if (!keys) return undefined;
-	if (capture && (config.toolDiagnostic !== capture.toolDiagnostic || config.runtimeAcknowledgements !== capture.runtimeAcknowledgements || config.backgroundDrain !== capture.backgroundDrain)) return undefined;
+	if (capture && (config.toolDiagnostic !== capture.toolDiagnostic || config.runtimeAcknowledgements !== capture.runtimeAcknowledgements || config.backgroundDrain !== capture.backgroundDrain || config.runtimeState !== capture.runtimeState)) return undefined;
 	const waitKeys = dataKeys(config.waitTool);
 	if (!waitKeys || waitKeys.some((key) => key !== "enabled")) return undefined;
 	if (config.fast !== false || config.fanoutChild !== false || config.waitTool.enabled !== false) return undefined;
 	for (const key of keys) {
 		const value = Object.getOwnPropertyDescriptor(config, key)!.value;
 		if (["fast", "fanoutChild", "waitTool"].includes(key)) continue;
-		if (capture && (key === "toolDiagnostic" || key === "runtimeAcknowledgements" || key === "backgroundDrain")) continue;
+		if (capture && (key === "toolDiagnostic" || key === "runtimeAcknowledgements" || key === "backgroundDrain" || key === "runtimeState")) continue;
 		if (capture && key === "requiredTools" && Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype) {
 			const descriptors = Object.getOwnPropertyDescriptors(value);
 			if (Reflect.ownKeys(descriptors).length !== value.length + 1) return undefined;
@@ -144,6 +144,7 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = fa
 			if (error) drainError = error;
 			drainListener?.(active);
 		} }),
+		runtimeState: createChildSafeState(),
 	};
 	Object.assign(config, capture);
 	const hooks = childHooks(config, capture);

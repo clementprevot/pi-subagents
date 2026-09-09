@@ -72,6 +72,37 @@ it("reconciles fast terminal fanout output once before accepting the child final
 	}
 });
 
+it("drains and reconciles in-process child sessions even when hasUI is true", async () => {
+	const handlers = new Map<string, Function[]>();
+	const sent: Array<{ message: any; options: any }> = [];
+	const sessionId = path.join(os.tmpdir(), "reviewer-ui-session.jsonl");
+	const runId = `ui-persona-${Date.now()}`;
+	const asyncDir = path.join(DIRS.async, runId);
+	const ctx = { hasUI: true, sessionManager: { getSessionFile: () => sessionId } };
+	const emit = async (name: string, event: unknown) => { for (const fn of handlers.get(name) ?? []) await fn(event, ctx); };
+	registerSubagentPromptRuntime({
+		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
+		registerTool: () => {}, events: { on: () => () => {}, emit: () => {} },
+		sendMessage: (message: any, options: any) => sent.push({ message, options }),
+	} as never, childConfig({ fanoutChild: true }));
+	try {
+		await emit("session_start", {});
+		await emit("tool_result", { toolName: "subagent", details: { asyncId: runId } });
+		fs.mkdirSync(asyncDir, { recursive: true });
+		fs.mkdirSync(DIRS.results, { recursive: true });
+		fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ runId, sessionId, state: "complete", mode: "single", steps: [], startedAt: Date.now(), lastUpdate: Date.now() }));
+		updateActiveRunIndex(asyncDir, "complete");
+		fs.writeFileSync(path.join(DIRS.results, `${runId}.json`), JSON.stringify({ runId, sessionId, success: true, results: [{ agent: "persona", success: true, output: "UI CHILD FINDING" }] }));
+		await emit("agent_end", { messages: [] });
+		assert.equal(sent.length, 1);
+		assert.match(JSON.stringify(sent[0].message.content), /UI CHILD FINDING/);
+		assert.match(JSON.stringify(sent[0].message.content), /reconcile/i);
+	} finally {
+		fs.rmSync(asyncDir, { recursive: true, force: true });
+		fs.rmSync(path.join(DIRS.results, `${runId}.json`), { force: true });
+	}
+});
+
 for (const terminalState of ["failed", "paused"] as const) it(terminalState === "failed" ? "acknowledges an explicitly consumed failed completion so a degraded report can reconcile it" : "does not acknowledge a paused receipt as finished work", async () => {
 	const handlers = new Map<string, Function[]>();
 	let waitTool: any;

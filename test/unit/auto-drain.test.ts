@@ -168,4 +168,46 @@ describe("headless background-work auto-drain", () => {
 	it("fails without a session identity", async () => {
 		await assert.rejects(() => drainOutstandingWork({ state: state(null) }), /without an active session identity/);
 	});
+
+	it("does not settle while a remembered detached foreground descendant is still in flight", async () => {
+		const current = state("owner");
+		current.foregroundRuns = new Map([["fg-descendant", {
+			runId: "fg-descendant",
+			mode: "single",
+			cwd: "/tmp",
+			sessionId: "owner",
+			updatedAt: 1,
+			children: [{ agent: "reviewer", index: 0, status: "detached", updatedAt: 1 }],
+		}]]);
+		let waits = 0;
+		await drainOutstandingWork({
+			state: current,
+			timeoutMs: 1000,
+			now: () => waits * 10,
+			wait: async () => {
+				waits++;
+				current.foregroundRuns!.get("fg-descendant")!.children[0] = { agent: "reviewer", index: 0, status: "completed", updatedAt: 2 };
+				return waitResult("DETACHED FOREGROUND DONE");
+			},
+		});
+		assert.equal(waits, 1);
+	});
+
+	it("ignores detached foreground descendants owned by another session", async () => {
+		const current = state("owner");
+		current.foregroundRuns = new Map([["fg-foreign", {
+			runId: "fg-foreign",
+			mode: "single",
+			cwd: "/tmp",
+			sessionId: "other",
+			updatedAt: 1,
+			children: [{ agent: "reviewer", index: 0, status: "detached", updatedAt: 1 }],
+		}]]);
+		let waited = false;
+		await drainOutstandingWork({
+			state: current,
+			wait: async () => { waited = true; return waitResult("unexpected"); },
+		});
+		assert.equal(waited, false);
+	});
 });

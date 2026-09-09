@@ -1,4 +1,4 @@
-import type { JsonSchemaObject, ResolvedToolBudget, RunFanoutBudgetDescriptor } from "../../shared/types.ts";
+import type { JsonSchemaObject, ResolvedToolBudget, RunFanoutBudgetDescriptor, SubagentState } from "../../shared/types.ts";
 import type { ThinkingLevel } from "../../shared/model-info.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { PermissionRules } from "./permissions.ts";
@@ -88,6 +88,8 @@ export interface ChildRuntimeConfig {
 	waitTool: ResolvedWaitToolConfig;
 	/** Launch-owned drain lifecycle; hard cancellation remains controlled by the host. */
 	backgroundDrain?: { signal: AbortSignal; abort(action?: "interrupt" | "stop" | "timeout"): void; report(active: boolean, error?: string): void };
+	/** Shared child bookkeeping so drain and fanout see the same remembered descendants. */
+	runtimeState?: SubagentState;
 	structuredOutput?: ChildStructuredOutput;
 	requiredTools?: string[];
 	mcpDirectTools?: string[];

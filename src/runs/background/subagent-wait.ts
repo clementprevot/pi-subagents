@@ -219,15 +219,18 @@ function matchesId(run: AsyncRunSummary, id: string): boolean {
 	return run.id === id || run.id.startsWith(id);
 }
 
-function activeDetachedForegroundRuns(params: SubagentWaitParams, deps: SubagentWaitDeps): ForegroundResumeRun[] {
-	if (!params.id || !deps.state.foregroundRuns) return [];
+function sessionDetachedForegroundRuns(deps: SubagentWaitDeps): ForegroundResumeRun[] {
 	const sessionId = deps.state.currentSessionId;
-	if (!sessionId) return [];
+	if (!sessionId || !deps.state.foregroundRuns) return [];
 	return [...deps.state.foregroundRuns.values()].filter((run) =>
-		(run.runId === params.id || run.runId.startsWith(params.id!))
-		&& run.sessionId === sessionId
-		&& run.children.some((child) => child.status === "detached")
+		run.sessionId === sessionId && run.children.some((child) => child.status === "detached")
 	);
+}
+
+function activeDetachedForegroundRuns(params: SubagentWaitParams, deps: SubagentWaitDeps): ForegroundResumeRun[] {
+	const runs = sessionDetachedForegroundRuns(deps);
+	if (params.id) return runs.filter((run) => run.runId === params.id || run.runId.startsWith(params.id!));
+	return params.all === true ? runs : [];
 }
 
 function summarizeForegroundChildren(run: ForegroundResumeRun, indices: Set<number>): string {
@@ -529,7 +532,10 @@ async function waitForDetachedForegroundRun(
 		}
 		const pending = current.children.filter((child) => initialDetachedIndices.has(child.index) && child.status === "detached");
 		const attention = foregroundChildrenNeedingAttention(current, initialDetachedIndices);
-		if (attention.length > 0) return formatForegroundAttention(current, attention, now() - startedAt);
+		if (attention.length > 0) {
+			const attentionResult = formatForegroundAttention(current, attention, now() - startedAt);
+			return deps.failOnAttention === true ? { ...attentionResult, isError: true } : attentionResult;
+		}
 		if (pending.length === 0) {
 			const outcome = summarizeForegroundChildren(current, initialDetachedIndices);
 			return result(
@@ -549,6 +555,26 @@ async function waitForDetachedForegroundRun(
 		}
 		await waitForWake(pollIntervalMs, signal, deps);
 	}
+}
+
+async function waitForSessionDetachedForegroundRuns(
+	runs: ForegroundResumeRun[],
+	signal: AbortSignal | undefined,
+	deps: SubagentWaitDeps,
+	startedAt: number,
+	now: () => number,
+	pollIntervalMs: number,
+	timeoutMs: number,
+): Promise<AgentToolResult<Details>> {
+	const texts: string[] = [];
+	for (const run of runs) {
+		const current = deps.state.foregroundRuns?.get(run.runId);
+		if (!current || current.sessionId !== run.sessionId || !current.children.some((child) => child.status === "detached")) continue;
+		const one = await waitForDetachedForegroundRun(current, signal, deps, startedAt, now, pollIntervalMs, timeoutMs);
+		if (one.isError) return one;
+		texts.push(one.content.map((part) => part.type === "text" ? part.text : "").join("\n").trim());
+	}
+	return result(texts.filter(Boolean).join("\n") || `Waited ${formatDuration(now() - startedAt)} for remembered detached foreground run(s); done.`);
 }
 
 /**
@@ -635,6 +661,9 @@ export async function waitForSubagents(
 						deps.failOnFailedRuns === true && terminal.some((run) => run.state !== "complete"), completions);
 				}
 			} catch (error) { return result(error instanceof Error ? error.message : String(error), true); }
+		}
+		if (waitForAll && !params.id && foreground.length > 0) {
+			return waitForSessionDetachedForegroundRuns(foreground, signal, deps, startedAt, now, pollIntervalMs, timeoutMs);
 		}
 		return result(params.id
 			? `No active run matched "${params.id}". Nothing to wait for.`
@@ -729,6 +758,14 @@ export async function waitForSubagents(
 	const recoveryNote = formatCompletionRecovery(completions) + (completionContent.length ? `\n${completionContent.join("\n")}\n` : "");
 
 	if (waitForAll) {
+		const remainingForeground = !params.id ? sessionDetachedForegroundRuns(deps) : [];
+		const foregroundResult = remainingForeground.length > 0
+			? await waitForSessionDetachedForegroundRuns(remainingForeground, signal, deps, startedAt, now, pollIntervalMs, timeoutMs)
+			: undefined;
+		if (foregroundResult?.isError) return foregroundResult;
+		const foregroundNote = foregroundResult
+			? `\n${foregroundResult.content.map((part) => part.type === "text" ? part.text : "").join("\n")}`
+			: "";
 		const scope = params.id
 			? `run "${params.id}"`
 			: initialProviderIds.size === 0
@@ -736,7 +773,7 @@ export async function waitForSubagents(
 				: `${initialAsyncIds.size} async run(s) and ${initialProviderIds.size} provider item(s)`;
 		const status = relevantAttention.length > 0 ? "attention required" : "done";
 		return result(
-			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`,
+			`Waited ${elapsed} for ${scope}; ${status}.${outcome}${recoveryNote}${resumeGuidance}${attentionNote}${foregroundNote} Completion/control events have been observed; inspect status if a notification is not visible yet.`,
 			(deps.failOnFailedRuns === true && failedAsyncCount > 0) || (deps.failOnAttention === true && relevantAttention.length > 0),
 			completions,
 		);
