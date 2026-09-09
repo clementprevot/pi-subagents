@@ -18,6 +18,7 @@
 - Document task-derived behavior labels for workflow launches in the built-in pi-subagents skill, including reviews and retained follow-ups.
 
 ### Fixed
+- Reject materialized workflow launch groups with invalid worktree repositories or dirty sources before dispatching children or claiming fan-out/output ownership. Allocation still rechecks; workflow-key failure traces may remain. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #2076.
 - Wait for remembered detached foreground descendants before parent settlement, without aborting a result-bearing child on the runner grace window. Thanks to [@shaharmor](https://github.com/shaharmor) for #2051.
 - Do not report owned process-tree cleanup as `observed` when a detached descendant remains active after the owned process group exits. Thanks to [@rtbe](https://github.com/rtbe) for #2053.
 - Ignore verbs inside filenames and path-like tokens when classifying implementation intent, so artifact names such as `daily-update.mp3` do not create an implementation obligation. Thanks to [@SiebertLanhove](https://github.com/SiebertLanhove) for #2039.

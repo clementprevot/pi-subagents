@@ -1123,7 +1123,7 @@ export interface RunWorkflowScriptOptions {
 	continueAfterAbortWhenChildrenSettled?: (abortError: Error) => boolean;
 	/** Maximum children executing concurrently within this workflow. Defaults to 20. */
 	globalConcurrencyLimit?: number;
-	admit?: (calls: Array<{ key: string; params: Record<string, unknown> }>) => void | Promise<void>;
+	admit?: (calls: Array<{ key: string; params: Record<string, unknown> }>, signal: AbortSignal) => void | Promise<void>;
 	launch: (key: string, params: Record<string, unknown>, signal: AbortSignal, admission: { admitted: boolean; batch: boolean }) => Promise<WorkflowScriptChildResult>;
 	resolveResume?: (reference: WorkflowReceiptResumeReference | string, signal: AbortSignal, index?: number) => string | WorkflowResolvedResumeReference | Promise<string | WorkflowResolvedResumeReference>;
 	status: (keyOrRunId: string, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
@@ -2231,7 +2231,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				admission = Promise.resolve().then(() => {
 					if (settled || finishing) return;
 					for (const call of calls) assertRecoveryBarrierAllowsRun(call.key, call.params);
-					return options.admit?.(calls);
+					return options.admit?.(calls, childController.signal);
 				});
 				if (batch) batchAdmissions.set(batch.id, admission);
 			}

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
+import { preflightWorkflowWorktrees } from "../../src/runs/foreground/subagent-executor.ts";
 
 describe("scripted workflow runtime", () => {
 	it("uses ordinary statement-body return semantics", async () => {
@@ -385,11 +386,14 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(launchParams?.intercomBridge, { mode: "off" });
 	});
 
-	it("resolves a keyed workflow receipt before launching a retained child", async () => {
+	it("resolves a keyed workflow receipt despite an invalid current worktree source", async (t) => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-receipt-resume-"));
+		t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
 		let launchParams: Record<string, unknown> | undefined;
 		let resolvedReference: unknown;
 		const result = await runWorkflowScript({
 			script: `return runs.run("cross-review", { resume: { workflowRunId: "workflow-1", key: "advisor", latest: true }, task: "Continue" });`,
+			admit: (calls, signal) => preflightWorkflowWorktrees({ workflowDefaults: { worktree: true }, calls, ctxCwd: cwd, signal }),
 			resolveResume(reference) {
 				resolvedReference = reference;
 				return { runId: "retained-run", runIds: ["ancestor-run", "retained-run"] };
@@ -416,6 +420,7 @@ describe("scripted workflow runtime", () => {
 			await assert.rejects(
 				runWorkflowScript({
 					script: `return runs.run("cross-review", { resume: ${resume}, task: "Continue" });`,
+					admit() { assert.fail("Invalid receipt reached admission"); },
 					async launch(key) { return { key, ok: true, output: "unexpected", artifactPaths: [] }; },
 					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 				}),
@@ -2580,12 +2585,14 @@ describe("scripted workflow runtime", () => {
 		let launchCount = 0;
 		let resolveAdmission!: () => void;
 		let markAdmissionStarted!: () => void;
+		let admissionSignal: AbortSignal | undefined;
 		const admissionStarted = new Promise<void>((resolve) => { markAdmissionStarted = resolve; });
 
 		const workflow = runWorkflowScript({
 			script: `await runs.run("slow", { agent: "worker", task: "wait" });`,
 			signal: controller.signal,
-			admit() {
+			admit(_calls, signal) {
+				admissionSignal = signal;
 				markAdmissionStarted();
 				return new Promise<void>((resolve) => { resolveAdmission = resolve; });
 			},
@@ -2598,6 +2605,7 @@ describe("scripted workflow runtime", () => {
 
 		await admissionStarted;
 		controller.abort(new Error("Workflow stopped by user."));
+		assert.equal(admissionSignal?.aborted, true);
 		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
 			&& error.message === "Workflow stopped by user."
 			&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped")
