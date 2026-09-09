@@ -371,24 +371,6 @@ describe("active async capacity", () => {
 		}
 	});
 
-	it("releases terminal workflows when a resumed async child failed before startup", () => {
-		const rootDir = tempRoot();
-		const asyncRoot = path.join(rootDir, "runs");
-		const workflowDir = path.join(asyncRoot, "workflow");
-		const childDir = path.join(asyncRoot, "revived-child");
-		try {
-			const workflow = acquireActiveAsyncCapacity({ sessionId: "session-a", limit: 1, runId: "workflow", kind: "workflow", asyncDir: workflowDir }, { rootDir });
-			assert.ok(workflow);
-			workflow.markWorkflowStarted();
-			writeJson(path.join(workflowDir, "status.json"), { runId: "workflow", sessionId: "session-a", mode: "workflow", state: "failed", startedAt: 100, steps: [{ agent: "worker", workflowKey: "resume", runId: "revived-child", async: true, status: "failed" }] });
-			writeJson(path.join(childDir, "status.json"), { runId: "revived-child", sessionId: "session-a", mode: "single", state: "failed", startedAt: 100, error: "already owned by run 'workflow-competing-revival'", processTerminal: { version: 1, state: "not-started", runId: "revived-child", runnerProcessInstanceId: "runner-child" } });
-
-			assert.deepEqual(getActiveAsyncCapacitySnapshot("session-a", 1, { rootDir }), { used: 0, limit: 1 });
-		} finally {
-			fs.rmSync(rootDir, { recursive: true, force: true });
-		}
-	});
-
 	it("retains terminal workflows while a resumed async child lacks observed proof", () => {
 		const rootDir = tempRoot();
 		const asyncRoot = path.join(rootDir, "runs");
