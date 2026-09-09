@@ -564,9 +564,8 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 
 		/** The child run ended (or was forced to end); fold in the outcome once the child's shutdown work is done. */
 		const failUnconsumedSteers = (): void => {
-			const reason = unconsumedSteerReason(childSessionHasQueuedMessages(session));
 			for (const entry of acceptedSteers.splice(0)) {
-				input.onSteerOutcome?.(entry.request, { state: "failed", message: reason });
+				input.onSteerOutcome?.(entry.request, { state: "failed", message: unconsumedSteerReason(entry.request.mode) });
 			}
 		};
 		const settle = (promptError: unknown, forced = false): void => {

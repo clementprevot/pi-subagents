@@ -311,13 +311,72 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(recent.find((request) => request.id === "steer-1")?.targets[0]?.state, "failed");
 		assert.equal(recent.find((request) => request.id === "steer-2")?.targets[0]?.state, "failed");
 		assert.equal(recent.find((request) => request.id === "steer-1")?.targets[0]?.reason, "child completed before consuming steering");
-		assert.equal(recent.find((request) => request.id === "steer-2")?.targets[0]?.reason, "child completed before consuming steering");
+		assert.equal(recent.find((request) => request.id === "steer-2")?.targets[0]?.reason, "child completed before consuming follow-up");
 		const journal = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; requestId?: string; reason?: string });
+		assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === "steer-1" && event.reason === "child completed before consuming steering"));
+		assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === "steer-2" && event.reason === "child completed before consuming follow-up"));
 		for (const requestId of ["steer-1", "steer-2"]) {
 			assert.ok(journal.some((event) => event.type === "subagent.steer.queued" && event.requestId === requestId));
-			assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === requestId && event.reason === "child completed before consuming steering"));
 			assert.ok(!journal.some((event) => event.type === "subagent.steer.delivered" && event.requestId === requestId));
 		}
+	});
+
+	it("fails mixed unconsumed modes with request-specific reasons while queued input remains", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("before queued hold")],
+			holdQueuedMessagesUntilAbort: true,
+		});
+		const id = `async-steer-unconsumed-queued-${Date.now().toString(36)}`;
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Wait for guidance",
+			agentConfig: makeAgent("worker", { completionGuard: false }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-steer-unconsumed-queued" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+		await waitForMockPiCall(mockPi, 0, 10_000);
+		const scriptedFinal = path.join(mockPi.dir, "scripted-final.jsonl");
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(scriptedFinal)) {
+			if (Date.now() > deadline) assert.fail("Timed out waiting for scripted final message");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		const asyncDir = path.join(ASYNC_DIR, id);
+		requestAsyncSteer(asyncDir, { message: "Steer while the queue is still live.", id: "queued-steer", ts: Date.now() });
+		requestAsyncSteer(asyncDir, { message: "Follow up while the queue is still live.", id: "queued-follow", ts: Date.now() + 1, mode: "follow_up" });
+		type SteeringTargets = { steering?: { recent: Array<{ id: string; targets: Array<{ state: string; reason?: string }> }> } };
+		const queuedStatePath = path.join(mockPi.dir, "queued-messages.json");
+		const accepted = await waitForAsyncState(id, (candidate) => {
+			const recent = (candidate as SteeringTargets).steering?.recent ?? [];
+			let queuedState: { count?: number; modes?: string[] } | undefined;
+			try {
+				queuedState = JSON.parse(fs.readFileSync(queuedStatePath, "utf-8")) as { count?: number; modes?: string[] };
+			} catch {
+				queuedState = undefined;
+			}
+			return recent.some((request) => request.id === "queued-steer" && request.targets[0]?.state === "queued")
+				&& recent.some((request) => request.id === "queued-follow" && request.targets[0]?.state === "queued")
+				&& queuedState?.count === 2
+				&& queuedState.modes?.includes("steer") === true
+				&& queuedState.modes?.includes("followUp") === true;
+		}) as AsyncStatusPayload & SteeringTargets;
+		assert.equal(accepted.state, "running");
+		assert.deepEqual(JSON.parse(fs.readFileSync(queuedStatePath, "utf-8")), { count: 2, modes: ["steer", "followUp"] });
+		deliverStopRequest({ asyncDir, pid: accepted.pid, source: "test" });
+		await readAsyncPayload(id);
+		const terminal = await waitForAsyncState(id, (candidate) => candidate.state !== "running") as AsyncStatusPayload & SteeringTargets;
+		const recent = terminal.steering?.recent ?? [];
+		assert.equal(recent.find((request) => request.id === "queued-steer")?.targets[0]?.state, "failed");
+		assert.equal(recent.find((request) => request.id === "queued-follow")?.targets[0]?.state, "failed");
+		assert.equal(recent.find((request) => request.id === "queued-steer")?.targets[0]?.reason, "child completed before consuming steering");
+		assert.equal(recent.find((request) => request.id === "queued-follow")?.targets[0]?.reason, "child completed before consuming follow-up");
+		assert.notEqual(recent.find((request) => request.id === "queued-steer")?.targets[0]?.reason, recent.find((request) => request.id === "queued-follow")?.targets[0]?.reason);
+		const journal = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; requestId?: string; reason?: string });
+		assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === "queued-steer" && event.reason === "child completed before consuming steering"));
+		assert.ok(journal.some((event) => event.type === "subagent.steer.failed" && event.requestId === "queued-follow" && event.reason === "child completed before consuming follow-up"));
+		assert.ok(!journal.some((event) => event.reason === "run ended before queued follow-up delivery"));
 	});
 
 	it("reports consumed inbox steer and follow-up at run end, including equal-text duplicates", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

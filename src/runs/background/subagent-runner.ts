@@ -4852,7 +4852,7 @@ export async function runSubagent(
 		for (const target of request.targets) {
 			if (target.state !== "scheduled" && target.state !== "routed" && target.state !== "queued") continue;
 			changed = true;
-			const reason = target.state === "queued" ? unconsumedSteerReason(false) : "child terminated before steering delivery";
+			const reason = target.state === "queued" ? unconsumedSteerReason() : "child terminated before steering delivery";
 			updateSteeringLifecycleTarget(request.id, target.index, "failed", Date.now(), { reason });
 			markSteeringAttention(target.index);
 			emitSteeringEvent("subagent.steer.failed", { type: "steer", id: request.id, ts: request.requestedAt, message: reason }, target.index, { reason });

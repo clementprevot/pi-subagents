@@ -46,6 +46,8 @@ export interface FakeChildResponse {
 	queuedMessageTurnStartDelayMs?: number;
 	/** Assistant text emitted for that delayed queued-message turn. */
 	queuedMessageOutput?: string;
+	/** Keep post-final queued input pending until abort; do not emit user `message_end` or continue. */
+	holdQueuedMessagesUntilAbort?: boolean;
 }
 
 export interface FakeChildSessionRecord {
@@ -241,11 +243,22 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 			const wakeQueuedWaiters = (): void => {
 				for (const resolve of queuedWaiters.splice(0)) resolve();
 			};
+			const recordQueuedState = (): void => {
+				try {
+					fs.writeFileSync(path.join(queueDir(), "queued-messages.json"), `${JSON.stringify({
+						count: queued.length,
+						modes: queued.map((item) => item.mode),
+					})}\n`, "utf-8");
+				} catch {
+					// Observability for tests only.
+				}
+			};
 			const enqueue = (text: string, mode: "steer" | "followUp"): void => {
 				record.steers.push({ text, mode });
 				recordSteer(text, mode);
 				if (!boundaryOpen) return;
 				queued.push({ text, mode });
+				recordQueuedState();
 				wakeQueuedWaiters();
 			};
 			const waitForQueuedMessage = (): Promise<void> => {
@@ -263,6 +276,7 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 			const drainQueuedBoundary = async (response: FakeChildResponse, task: string): Promise<void> => {
 				while (queued.length > 0 && !record.aborted) {
 					const drained = queued.splice(0);
+					recordQueuedState();
 					for (const item of drained) {
 						emit({
 							type: "message_end",
@@ -374,6 +388,11 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 				emit({ type: "agent_settled" });
 				boundaryOpen = true;
 				markScriptedFinal();
+				if (response.holdQueuedMessagesUntilAbort) {
+					if (queued.length === 0 && !record.aborted) await waitForQueuedMessage();
+					if (!record.aborted) await abortedPromise;
+					return;
+				}
 				const keepAliveMs = typeof response.keepAliveAfterFinalMessageMs === "number" && response.keepAliveAfterFinalMessageMs > 0
 					? response.keepAliveAfterFinalMessageMs
 					: 0;

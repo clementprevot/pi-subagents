@@ -51,9 +51,11 @@ describe("steering lifecycle ledger", () => {
 		assert.deepEqual(accepted.map((entry) => entry.id), ["other"]);
 	});
 
-	it("describes unconsumed steers from aggregate queue evidence", () => {
-		assert.equal(unconsumedSteerReason(true), "run ended before queued follow-up delivery");
-		assert.equal(unconsumedSteerReason(false), "child completed before consuming steering");
+	it("describes unconsumed requests by delivery mode, not aggregate queue state", () => {
+		assert.equal(unconsumedSteerReason(), "child completed before consuming steering");
+		assert.equal(unconsumedSteerReason("steer"), "child completed before consuming steering");
+		assert.equal(unconsumedSteerReason("auto"), "child completed before consuming steering");
+		assert.equal(unconsumedSteerReason("follow_up"), "child completed before consuming follow-up");
 	});
 
 	it("does not double-count pending when a routed target becomes queued then delivered", () => {

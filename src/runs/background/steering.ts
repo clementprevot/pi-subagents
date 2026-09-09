@@ -14,6 +14,7 @@ import type {
 import { readStatus } from "../../shared/utils.ts";
 import { previewDisplayText } from "../../shared/display-text.ts";
 import { redactSecretValues } from "../shared/permissions.ts";
+import type { SteerDeliveryMode } from "./control-channel.ts";
 
 export const MAX_STEERING_REQUESTS = 20;
 export const STEERING_MESSAGE_PREVIEW_LIMIT = 160;
@@ -30,10 +31,10 @@ export function takeMatchingAcceptedSteer<T extends { text: string }>(accepted: 
 	return entry;
 }
 
-/** Settlement reason for an accepted steer that never got a matching user `message_end`. */
-export function unconsumedSteerReason(hasQueuedMessages: boolean): string {
-	return hasQueuedMessages
-		? "run ended before queued follow-up delivery"
+/** Settlement reason for one accepted request that never got a matching user `message_end`. */
+export function unconsumedSteerReason(mode?: SteerDeliveryMode): string {
+	return mode === "follow_up"
+		? "child completed before consuming follow-up"
 		: "child completed before consuming steering";
 }
 
