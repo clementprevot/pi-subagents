@@ -342,22 +342,41 @@ describe("default child session factory", () => {
 		assert.deepEqual(errors, ["<loader>"]);
 	});
 
-	it("initializes the theme from settings before each child session", async () => {
-		const themed: Array<string | undefined> = [];
+	it("preserves an initialized parent theme when creating a child session", async () => {
+		const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
+		const globals = globalThis as Record<symbol, unknown>;
+		const previousTheme = globals[themeKey];
+		const initialized: Array<string | undefined> = [];
 		const pi = stubPi();
-		pi.initTheme = ((themeName?: string) => { themed.push(themeName); }) as PiCodingAgentModule["initTheme"];
-		pi.SettingsManager = { create: () => ({ getTheme: () => "solarized-dark" }) } as unknown as PiCodingAgentModule["SettingsManager"];
+		pi.initTheme = ((themeName?: string) => { initialized.push(themeName); }) as PiCodingAgentModule["initTheme"];
+		pi.SettingsManager = { create: () => ({ getTheme: () => "vesper-light/vesper-dark" }) } as unknown as PiCodingAgentModule["SettingsManager"];
 		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
-		await factory.create(stubLaunch);
-		await factory.create(stubLaunch);
-		assert.deepEqual(themed, ["solarized-dark", "solarized-dark"]);
+		globals[themeKey] = { name: "vesper-light" };
+		try {
+			await factory.create(stubLaunch);
+			assert.deepEqual(initialized, []);
+		} finally {
+			if (previousTheme === undefined) delete globals[themeKey];
+			else globals[themeKey] = previousTheme;
+		}
 	});
 
-	it("skips theme initialization when the pi module has no initTheme export", async () => {
-		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => stubPi() });
-		await factory.create(stubLaunch);
-		// Reaching here without throwing is the assertion: `settingsManager.getTheme()`
-		// must not be evaluated when `initTheme` is unavailable.
+	it("initializes the theme in a headless runner process", async () => {
+		const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
+		const globals = globalThis as Record<symbol, unknown>;
+		const previousTheme = globals[themeKey];
+		const initialized: Array<string | undefined> = [];
+		const pi = stubPi();
+		pi.initTheme = ((themeName?: string) => { initialized.push(themeName); }) as PiCodingAgentModule["initTheme"];
+		pi.SettingsManager = { create: () => ({ getTheme: () => "vesper-light/vesper-dark" }) } as unknown as PiCodingAgentModule["SettingsManager"];
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		delete globals[themeKey];
+		try {
+			await factory.create(stubLaunch);
+			assert.deepEqual(initialized, ["vesper-light/vesper-dark"]);
+		} finally {
+			if (previousTheme !== undefined) globals[themeKey] = previousTheme;
+		}
 	});
 
 	it("disposes the session when bindExtensions rejects", async () => {
