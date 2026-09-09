@@ -88,6 +88,31 @@ describe("below-editor subagent FleetView", () => {
 		} finally { fleet.dispose(); }
 	});
 
+	it("preserves unrelated native usage beside workflow child usage in the compact roster", () => {
+		const state = stateForTest();
+		const childUsage = { input: 119_000, output: 200, total: 119_200, window: 118_900 };
+		state.asyncJobs.set("workflow", {
+			asyncId: "workflow", asyncDir: "/tmp/workflow", mode: "workflow", status: "running",
+			totalTokens: childUsage,
+			steps: [{ agent: "reviewer", workflowKey: "review", status: "running", tokens: childUsage }],
+		});
+		state.asyncJobs.set("child", {
+			asyncId: "child", asyncDir: "/tmp/child", mode: "single", status: "running",
+			parentWorkflowRunId: "workflow", workflowKey: "review", totalTokens: childUsage,
+		});
+		state.foregroundControls.set("standalone", {
+			runId: "standalone", mode: "single", currentAgent: "worker", startedAt: Date.now(), updatedAt: Date.now(),
+			tokens: 42_000, window: 30_000,
+		});
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext({ hasUI: true, ui: { setWidget() {}, theme } } as unknown as ExtensionContext);
+			const compact = fleet.render(240, theme as unknown as ExtensionContext["ui"]["theme"]).join("\n");
+			assert.match(compact, /standalone: ↓ 30\.0k window · 42\.0k spent · workflow usage on child rows/);
+			assert.doesNotMatch(compact, /119\.2k|161\.2k|280\.4k|Σ windows/);
+		} finally { fleet.dispose(); }
+	});
+
 	it("labels concurrent context windows as a sum in the visible compact roster", () => {
 		const state = stateForTest();
 		for (const id of ["one", "two"]) state.foregroundControls.set(id, {

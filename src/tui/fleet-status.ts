@@ -696,7 +696,7 @@ export class SubagentFleetStatus {
 			// Workflow totals can overlap child usage and omit live lanes. Do not
 			// present either wrapper totals or an active-only sum as workflow spend.
 			const hasWorkflow = workEntries.some((entry) => entry.workflowWrapper);
-			const nativeEntries = workEntries.filter((entry) => !entry.external && !entry.workflowWrapper);
+			const nativeEntries = workEntries.filter((entry) => !entry.external && !entry.workflowWrapper && !entry.parentKey);
 			const tokens = nativeEntries.reduce((total, entry) => total + entry.tokens, 0);
 			const window = nativeEntries.length > 0 && nativeEntries.every((entry) => entry.window !== undefined)
 				? nativeEntries.reduce((total, entry) => total + entry.window!, 0)
@@ -711,7 +711,10 @@ export class SubagentFleetStatus {
 			const paneAttention = projectEntries.filter((entry) => entry.projectPane && projectPaneNeedsAttention(entry.projectPane)).length;
 			const panes = projectEntries.length > 0 ? `${projectEntries.length} pane${projectEntries.length === 1 ? "" : "s"}${paneAttention ? ` (${paneAttention} ⚠)` : ""}` : "";
 			const label = [agents, asyncRuns, panes].filter(Boolean).join(" · ");
-			const usage = hasWorkflow ? "usage on child rows" : formatFleetTokens(tokens, window, nativeEntries.length);
+			const nativeUsage = formatFleetTokens(tokens, window, nativeEntries.length);
+			const usage = hasWorkflow
+				? nativeEntries.length > 0 ? `standalone: ${nativeUsage} · workflow usage on child rows` : "usage on child rows"
+				: nativeUsage;
 			const detail = [showNativeSummary ? usage : undefined, "↓/← to inspect"].filter(Boolean).join(" · ");
 			return [truncateToWidth(`  ${theme.fg("muted", label)}${label && detail ? " · " : ""}${theme.fg("dim", detail)}`, width)];
 		}
