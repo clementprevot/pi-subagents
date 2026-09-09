@@ -7,9 +7,11 @@ import type { SubagentState } from "../../src/shared/types.ts";
 import { EXTERNAL_RUN_REGISTRY_KEY, EXTERNAL_RUN_REGISTRY_VERSION, registerExternalRun } from "../../src/api/external-runs.ts";
 import { collectFleetSnapshot } from "../../src/tui/fleet.ts";
 import {
+	FLEET_AGENT_IDENTITY_COLORS,
 	FLEET_STATUS_WIDGET_KEY,
 	SubagentFleetStatus,
 	collectFleetStatusEntries,
+	fleetAgentIdentityColor,
 	formatFleetElapsed,
 	formatFleetTokens,
 	resolveFleetViewPlacement,
@@ -43,6 +45,23 @@ const theme = {
 	bg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
 };
+
+const colorTheme = {
+	fg: (name: string, text: string) => `\x1b[${name}m${text}\x1b[0m`,
+	bg: (_name: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+const FLEET_STATUS_SEMANTIC_COLORS = new Set(["accent", "success", "error", "warning", "muted", "dim"]);
+
+function visibleText(value: string): string {
+	return value.replace(/\x1b\[[^\x1b]*m/g, "");
+}
+
+function colorNameAround(line: string | undefined, label: string): string | undefined {
+	if (!line) return undefined;
+	return line.match(new RegExp(`\\x1b\\[(\\w+)m${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))?.[1];
+}
 
 describe("below-editor subagent FleetView", () => {
 	it("formats elapsed time and token counts like the Claude Code fleet", () => {
@@ -202,6 +221,119 @@ describe("below-editor subagent FleetView", () => {
 			assert.equal(component.render(80).length, 1);
 			assert.deepEqual(fleet.handleKey("\x1b[D"), { consume: true });
 			assert.ok(component.render(80).length > 1, "Left should also expand the roster");
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("keeps common FleetView agent identities on distinct theme colors", () => {
+		for (const color of FLEET_AGENT_IDENTITY_COLORS) {
+			assert.equal(FLEET_STATUS_SEMANTIC_COLORS.has(color), false, `${color} must not reuse a status/semantic theme token`);
+		}
+		assert.equal(new Set(FLEET_AGENT_IDENTITY_COLORS).size, FLEET_AGENT_IDENTITY_COLORS.length);
+		for (const [left, right] of [["scout", "worker"], ["tester", "explorer"], ["debug", "videoReview"]] as const) {
+			assert.notEqual(fleetAgentIdentityColor(left), fleetAgentIdentityColor(right), `${left} and ${right} must not share an identity color`);
+		}
+		assert.equal(fleetAgentIdentityColor("scout"), fleetAgentIdentityColor("scout"));
+		assert.notEqual(fleetAgentIdentityColor("worker-0"), fleetAgentIdentityColor("worker-1"));
+	});
+
+	it("keeps agent color stable when async display labels differ", () => {
+		const state = stateForTest();
+		state.asyncJobs.set("labeled-agents", {
+			asyncId: "labeled-agents",
+			asyncDir: "/tmp/labeled-agents",
+			status: "running",
+			mode: "parallel",
+			startedAt: Date.now() - 1_000,
+			updatedAt: Date.now(),
+			steps: [
+				{ agent: "scout", label: "Find seams", status: "running", index: 0 },
+				{ agent: "scout", label: "Audit API", status: "running", index: 1 },
+				{ agent: "worker", label: "Implement parser", status: "running", index: 2 },
+			],
+		});
+
+		let widgetFactory: ((tui: unknown, theme: typeof colorTheme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme: colorTheme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			const entries = collectFleetStatusEntries(state);
+			assert.deepEqual(entries.map((entry) => ({ agent: entry.agent, displayLabel: entry.displayLabel })), [
+				{ agent: "scout", displayLabel: "Find seams (scout)" },
+				{ agent: "scout", displayLabel: "Audit API (scout)" },
+				{ agent: "worker", displayLabel: "Implement parser (worker)" },
+			]);
+			fleet.setContext(ctx);
+			const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, colorTheme);
+			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
+			const lines = component.render(100);
+			const colorFor = (label: string) => colorNameAround(lines.find((line) => visibleText(line).includes(label)), label);
+			assert.equal(colorFor("Find seams (scout)"), fleetAgentIdentityColor("scout"));
+			assert.equal(colorFor("Audit API (scout)"), fleetAgentIdentityColor("scout"));
+			assert.equal(colorFor("Implement parser (worker)"), fleetAgentIdentityColor("worker"));
+			assert.notEqual(colorFor("Find seams (scout)"), colorFor("Implement parser (worker)"));
+			assert.ok(lines.every((line) => !/\x1b\[38;5;\d+m/.test(line)), "identity colors must go through the theme instead of raw ANSI-256");
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("colors nested agent labels from identity, not the model-thinking suffix", () => {
+		const state = stateForTest();
+		state.asyncJobs.set("supervisor", {
+			asyncId: "supervisor",
+			asyncDir: "/tmp/supervisor",
+			status: "running",
+			mode: "single",
+			startedAt: 10,
+			updatedAt: 20,
+			steps: [{ agent: "supervisor", index: 0, status: "running" }],
+			nestedChildren: [{
+				id: "nested-review",
+				parentRunId: "supervisor",
+				parentStepIndex: 0,
+				depth: 1,
+				path: [{ runId: "supervisor", stepIndex: 0 }],
+				state: "running",
+				agent: "nested-reviewer",
+				model: "anthropic/fable-5",
+				thinking: "low",
+			}],
+		});
+
+		let widgetFactory: ((tui: unknown, theme: typeof colorTheme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme: colorTheme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext(ctx);
+			const component = widgetFactory!({ requestRender() {}, focusedComponent: Object.create(Editor.prototype) as Editor }, colorTheme);
+			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
+			const lines = component.render(120);
+			const nested = lines.find((line) => visibleText(line).includes("nested-reviewer (fable-5 · thinking low)"));
+			assert.ok(nested);
+			assert.equal(colorNameAround(nested, "nested-reviewer (fable-5 · thinking low)"), fleetAgentIdentityColor("nested-reviewer"));
+			assert.notEqual(colorNameAround(nested, "nested-reviewer (fable-5 · thinking low)"), fleetAgentIdentityColor("nested-reviewer (fable-5 · thinking low)"));
 		} finally {
 			fleet.dispose();
 		}
