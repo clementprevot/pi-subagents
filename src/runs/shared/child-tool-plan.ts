@@ -462,19 +462,26 @@ export function resolvePiLaunchToolPlan(
 	// a core name shadow it with sourceInfo.source set to the extension. When a
 	// launch denies extensions the wrapper is gone, but pi core still provides
 	// the slot, so the name stays resolvable either way. Extension tool names
-	// (mcp__slack, web_search, ...) reach the child only from extensions the
-	// child actually loads: the ambient set when the launch enables it, or an
-	// extension the agent listed in `extensions` (matched against the host
-	// sources). Everything else stays pruned, so restricted launches fail closed.
+	// (mcp__slack, web_search, ...) reach the child only from extensions it
+	// actually loads: the ambient set when the launch enables it (limited to
+	// sources the runner rediscovers on its own), or an extension the agent
+	// listed in `extensions` (matched against the host sources). Everything
+	// else stays pruned, so restricted launches fail closed.
 	const childLoadsAmbientExtensions = input.ambientExtensions !== false
 		&& capabilityCeiling?.denyExtensions !== true
 		&& input.extensions === undefined;
+	// A detached runner rebuilds its ambient set from its own settings and
+	// autoload discovery. It rediscovers packages and drop-in extensions but
+	// not the parent's temporary registrations (CLI --extension paths, SDK
+	// tools), so only rediscoverable sources survive ambient inheritance.
+	const ambientSourceRediscoverable = (source: string | undefined): boolean =>
+		source !== undefined && (source === "auto" || source.startsWith("npm:"));
 	const resolvesInChild = (tool: string): boolean => {
 		if (NATIVE_COORDINATION_TOOL_NAMES.has(tool)) return true;
 		if (hostAvailableSet === undefined || !hostAvailableSet.has(tool)) return false;
 		if (PI_BUILTIN_TOOL_NAMES.has(tool)) return true;
-		if (childLoadsAmbientExtensions) return true;
 		const source = input.hostToolSources?.[tool];
+		if (childLoadsAmbientExtensions && ambientSourceRediscoverable(source)) return true;
 		if (source === undefined || capabilityCeiling?.denyExtensions === true) return false;
 		return (input.extensions ?? []).some((spec) => extensionSourcesMatch(spec, source));
 	};

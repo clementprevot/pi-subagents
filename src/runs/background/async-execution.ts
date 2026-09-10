@@ -1982,6 +1982,7 @@ export function executeAsyncSingle(
 				launchResolvedExtensions,
 				runFanoutBudget,
 				hostToolNames,
+				hostToolSources,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(lane ? { lane } : {}),

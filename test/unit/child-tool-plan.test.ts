@@ -95,6 +95,12 @@ describe("child tool plan host builtin intersection", () => {
 	describe("shadowed core tools and extension tool names", () => {
 		const tools = ["read", "web_search", "fetch_content"];
 		const hostToolNames = ["read", "web_search", "fetch_content", "source_check"];
+		const hostToolSources = {
+			read: "builtin",
+			web_search: "npm:pi-web-access",
+			fetch_content: "npm:pi-web-access",
+			source_check: "npm:pi-web-access",
+		};
 
 		it("keeps core tool names a package wrapper shadows", () => {
 			// pi-tool-display and pi-hashline-edit-pro re-register core names, so the
@@ -105,9 +111,23 @@ describe("child tool plan host builtin intersection", () => {
 		});
 
 		it("keeps extension tool names when the child inherits ambient extensions", () => {
-			const plan = resolvePiLaunchToolPlan({ tools, hostToolNames });
+			const plan = resolvePiLaunchToolPlan({ tools, hostToolNames, hostToolSources });
 			assert.deepEqual(plan.declaredBuiltinTools, tools);
 			assert.deepEqual(plan.unavailableHostBuiltins, []);
+		});
+
+		it("prunes parent-only temporary registrations from ambient inheritance", () => {
+			// A detached runner rediscovers npm packages and drop-ins from its own
+			// settings; a tool the parent registered from a temporary path (CLI
+			// --extension, SDK) is not rediscoverable, so ambient inheritance
+			// must not promise it
+			const plan = resolvePiLaunchToolPlan({
+				tools: ["read", "temp_tool"],
+				hostToolNames: ["read", "temp_tool"],
+				hostToolSources: { read: "builtin", temp_tool: "/tmp/parent-only.ts" },
+			});
+			assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+			assert.deepEqual(plan.unavailableHostBuiltins, ["temp_tool"]);
 		});
 
 		it("prunes extension tool names when a capability ceiling denies extensions", () => {
