@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { getHostToolNames, resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
+import { getHostToolNames, getHostToolSources, resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
 import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 import { MCP_RUNTIME_SNAPSHOT_EVENT, MCP_RUNTIME_SNAPSHOT_VERSION, type McpRuntimeSnapshotHost } from "../../src/runs/shared/mcp-direct-tool-allowlist.ts";
 
@@ -132,6 +132,81 @@ describe("child tool plan host builtin intersection", () => {
 			assert.deepEqual(plan.unavailableHostBuiltins, ["bash"]);
 		});
 	});
+
+		describe("ambient and explicit extension loading", () => {
+			const tools = ["read", "web_search", "fetch_content"];
+			const hostToolNames = ["read", "web_search", "fetch_content"];
+			const hostToolSources = { read: "builtin", web_search: "npm:pi-web-access", fetch_content: "npm:pi-web-access" };
+
+			it("prunes extension tool names for a foreground launch that never loads ambient extensions", () => {
+				const plan = resolvePiLaunchToolPlan({ tools, hostToolNames, ambientExtensions: false });
+				assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+				assert.deepEqual(plan.unavailableHostBuiltins, ["web_search", "fetch_content"]);
+			});
+
+			it("keeps extension tool names an explicitly listed extension provides", () => {
+				const plan = resolvePiLaunchToolPlan({
+					tools,
+					hostToolNames,
+					hostToolSources,
+					extensions: ["npm:pi-web-access"],
+					ambientExtensions: false,
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, tools);
+				assert.deepEqual(plan.unavailableHostBuiltins, []);
+			});
+
+			it("matches a path spec against the registered source", () => {
+				const plan = resolvePiLaunchToolPlan({
+					tools,
+					hostToolNames,
+					hostToolSources: { ...hostToolSources, web_search: "/ext/pi-web-access/dist/index.js", fetch_content: "/ext/pi-web-access/dist/index.js" },
+					extensions: ["/ext/pi-web-access/dist/index.js"],
+					ambientExtensions: false,
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, tools);
+			});
+
+			it("prunes extension tool names whose provider is not in the explicit list", () => {
+				const plan = resolvePiLaunchToolPlan({
+					tools,
+					hostToolNames,
+					hostToolSources,
+					extensions: ["npm:some-other-extension"],
+					ambientExtensions: false,
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+				assert.deepEqual(plan.unavailableHostBuiltins, ["web_search", "fetch_content"]);
+			});
+
+			it("prunes extension tool names when a capability ceiling denies extensions", () => {
+				const plan = resolvePiLaunchToolPlan({
+					tools,
+					hostToolNames,
+					hostToolSources,
+					extensions: ["npm:pi-web-access"],
+					capabilityCeiling: { version: 1 as const, denyExtensions: true, sources: ["test"] },
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+			});
+		});
+
+		describe("getHostToolSources", () => {
+			it("maps every registered tool name to its source", () => {
+				const host = {
+					getAllTools: () => [
+						{ name: "read", sourceInfo: { source: "builtin" } },
+						{ name: "web_search", sourceInfo: { source: "npm:pi-web-access" } },
+					],
+				};
+				assert.deepEqual(getHostToolSources(host), { read: "builtin", web_search: "npm:pi-web-access" });
+			});
+
+			it("returns undefined when discovery fails or the host registers nothing", () => {
+				assert.equal(getHostToolSources({ getAllTools: () => [] }), undefined);
+				assert.equal(getHostToolSources({ getAllTools: () => { throw new Error("not ready"); } }), undefined);
+			});
+		});
 	it("fails when requireReadTool is true but host does not provide read", () => {
 		assert.throws(
 			() => resolvePiLaunchToolPlan({

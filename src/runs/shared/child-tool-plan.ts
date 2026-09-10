@@ -196,6 +196,20 @@ export interface ResolvePiLaunchToolPlanInput {
 	 * empty or ceiling-restricted allowlists are not a minimum-tool contract.
 	 */
 	hostToolNames?: readonly string[];
+	/**
+	 * Tool name to `sourceInfo.source` for the same host registry. Lets the plan
+	 * keep an extension tool name the agent declared together with the extension
+	 * that provides it in `extensions`, and prune names whose provider the child
+	 * will not load.
+	 */
+	hostToolSources?: Record<string, string>;
+	/**
+	 * Whether the child launch loads ambient extensions. Foreground launches
+	 * hosted by the parent process never do (buildInProcessChildLaunch derives
+	 * this from its host); detached runner launches do when the extension policy
+	 * allows them. Defaults to true for callers that do not specify it.
+	 */
+	ambientExtensions?: boolean;
 }
 
 export interface PiLaunchToolPlan {
@@ -337,6 +351,20 @@ export function resolvePermissionSystemExtension(): string | undefined {
 }
 
 /**
+ * An explicit `extensions` spec keeps a requested tool name when the host
+ * registered that name from the same spec: npm specs match exactly, and a
+ * path spec matches when one side resolves under the other (relative vs
+ * absolute forms of the same file).
+ */
+function extensionSourcesMatch(spec: string, source: string): boolean {
+	const a = spec.trim().replace(/^\.\//, "");
+	const b = source.trim().replace(/^\.\//, "");
+	if (a === b) return true;
+	if (!a.includes("/") || !b.includes("/")) return false;
+	return b.endsWith(`/${a}`) || a.endsWith(`/${b}`);
+}
+
+/**
  * Extract every tool name the host runtime has registered, whatever its source.
  * Use this to pass `hostToolNames` to `resolvePiLaunchToolPlan` so child tool
  * plans intersect declared agent tools with what the host actually provides.
@@ -357,6 +385,30 @@ export function getHostToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[
 	try {
 		const names = pi.getAllTools().map((tool) => tool.name);
 		return names.length > 0 ? names : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Map every registered tool name to its `sourceInfo.source`. Pass this as
+ * `hostToolSources` alongside `hostToolNames` so child tool plans can tell
+ * which extension provides a requested tool name and keep the ones the
+ * agent listed in `extensions`.
+ *
+ * Returns `undefined` when discovery fails or yields nothing (same contract
+ * as `getHostToolNames`).
+ */
+export function getHostToolSources(pi: Pick<ExtensionAPI, "getAllTools">): Record<string, string> | undefined {
+	try {
+		const tools = pi.getAllTools();
+		if (tools.length === 0) return undefined;
+		const sources: Record<string, string> = {};
+		for (const tool of tools) {
+			const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
+			if (source !== undefined) sources[tool.name] = source;
+		}
+		return sources;
 	} catch {
 		return undefined;
 	}
@@ -410,14 +462,22 @@ export function resolvePiLaunchToolPlan(
 	// a core name shadow it with sourceInfo.source set to the extension. When a
 	// launch denies extensions the wrapper is gone, but pi core still provides
 	// the slot, so the name stays resolvable either way. Extension tool names
-	// (mcp__slack, web_search, ...) only reach the child when it loads the same
-	// ambient extension set, so they stay pruned for launches that deny extensions.
-	const childInheritsAmbientExtensions = capabilityCeiling?.denyExtensions !== true && input.extensions === undefined;
-	const resolvesInChild = (tool: string): boolean =>
-		NATIVE_COORDINATION_TOOL_NAMES.has(tool)
-		|| hostAvailableSet !== undefined
-			&& hostAvailableSet.has(tool)
-			&& (PI_BUILTIN_TOOL_NAMES.has(tool) || childInheritsAmbientExtensions);
+	// (mcp__slack, web_search, ...) reach the child only from extensions the
+	// child actually loads: the ambient set when the launch enables it, or an
+	// extension the agent listed in `extensions` (matched against the host
+	// sources). Everything else stays pruned, so restricted launches fail closed.
+	const childLoadsAmbientExtensions = input.ambientExtensions !== false
+		&& capabilityCeiling?.denyExtensions !== true
+		&& input.extensions === undefined;
+	const resolvesInChild = (tool: string): boolean => {
+		if (NATIVE_COORDINATION_TOOL_NAMES.has(tool)) return true;
+		if (hostAvailableSet === undefined || !hostAvailableSet.has(tool)) return false;
+		if (PI_BUILTIN_TOOL_NAMES.has(tool)) return true;
+		if (childLoadsAmbientExtensions) return true;
+		const source = input.hostToolSources?.[tool];
+		if (source === undefined || capabilityCeiling?.denyExtensions === true) return false;
+		return (input.extensions ?? []).some((spec) => extensionSourcesMatch(spec, source));
+	};
 	const declaredBuiltinTools = hostAvailableSet === undefined
 		? ceilingFilteredBuiltinTools
 		: ceilingFilteredBuiltinTools.filter((tool) => resolvesInChild(tool));

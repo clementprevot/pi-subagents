@@ -19,6 +19,7 @@ export interface RunnerChildLaunchContext {
 	capabilityCeiling?: BuildInProcessChildLaunchInput["capabilityCeiling"];
 	inheritedChildRuntime?: InheritedChildRuntime;
 	hostToolNames?: readonly string[];
+	hostToolSources?: Record<string, string>;
 }
 
 export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChildLaunchContext, attempt: {
@@ -83,6 +84,7 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		maxSubagentDepth: step.maxSubagentDepth,
 		inherited: ctx.inheritedChildRuntime,
 		hostToolNames: ctx.hostToolNames,
+		hostToolSources: ctx.hostToolSources,
 		host: "runner",
 	});
 }

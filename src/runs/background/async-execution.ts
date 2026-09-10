@@ -14,7 +14,7 @@ import { createAtomicJsonWriter, writePrivateAtomicJson } from "../../shared/ato
 import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { planChildLaunch, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
-import { applyThinkingSuffix, getHostToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, getHostToolNames, getHostToolSources, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
@@ -964,6 +964,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
 		const fast = s.fast ?? params.fast ?? a.fast;
 		const hostToolNames = getHostToolNames(ctx.pi);
+		const hostToolSources = getHostToolSources(ctx.pi);
 		const toolPlan = resolvePiLaunchToolPlan({
 			tools: a.tools,
 			excludeTools: a.excludeTools,
@@ -983,6 +984,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
 			hostToolNames,
+			hostToolSources,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -1380,6 +1382,7 @@ export function executeAsyncChain(
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				runFanoutBudget,
 				hostToolNames: getHostToolNames(ctx.pi),
+				hostToolSources: getHostToolSources(ctx.pi),
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1753,6 +1756,7 @@ export function executeAsyncSingle(
 		}
 	}
 	const hostToolNames = getHostToolNames(ctx.pi);
+	const hostToolSources = getHostToolSources(ctx.pi);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: agentConfig.tools,
 		excludeTools: agentConfig.excludeTools,
@@ -1772,6 +1776,7 @@ export function executeAsyncSingle(
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
 		hostToolNames,
+		hostToolSources,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {

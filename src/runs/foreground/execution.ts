@@ -443,6 +443,7 @@ async function runSingleAttempt(
 		maxSubagentDepth: options.maxSubagentDepth,
 		runtimeSnapshotHost: options.runtimeSnapshotHost,
 		hostToolNames: options.hostToolNames,
+		hostToolSources: options.hostToolSources,
 		inherited: options.childRuntime,
 		host: "parent",
 	});

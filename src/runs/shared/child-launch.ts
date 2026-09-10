@@ -119,6 +119,8 @@ export interface BuildInProcessChildLaunchInput {
 	 * still-permitted repository inspection tool is missing from that set.
 	 */
 	hostToolNames?: readonly string[];
+	/** Tool name to `sourceInfo.source` for the same host registry. */
+	hostToolSources?: Record<string, string>;
 }
 
 export interface InProcessChildCapture {
@@ -201,6 +203,10 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
 		hostToolNames: input.hostToolNames,
+		hostToolSources: input.hostToolSources,
+		// Parent-hosted (foreground) children never load ambient extensions; the
+		// detached runner does when the extension policy allows it.
+		ambientExtensions: input.host === "runner",
 	});
 
 	const inherited = input.inherited;
