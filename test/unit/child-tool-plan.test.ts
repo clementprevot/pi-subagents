@@ -151,6 +151,58 @@ describe("child tool plan host builtin intersection", () => {
 			assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
 			assert.deepEqual(plan.unavailableHostBuiltins, ["bash"]);
 		});
+		it("keeps a child-only extension tool absent from the parent registry", () => {
+			// docs contract: tools: read, fixture_search plus subagentOnlyExtensions
+			// ./tools/fixture-search.ts keeps fixture_search on the strict allowlist
+			const plan = resolvePiLaunchToolPlan({
+				tools: ["read", "fixture_search"],
+				hostToolNames: ["read"],
+				subagentOnlyExtensions: ["./tools/fixture-search.ts"],
+			});
+			assert.deepEqual(plan.declaredBuiltinTools, ["read", "fixture_search"]);
+			assert.deepEqual(plan.unavailableHostBuiltins, []);
+		});
+
+		it("still prunes an absent name when no child extension provides it", () => {
+			const plan = resolvePiLaunchToolPlan({
+				tools: ["read", "fixture_search"],
+				hostToolNames: ["read"],
+			});
+			assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+			assert.deepEqual(plan.unavailableHostBuiltins, ["fixture_search"]);
+		});
+
+		it("prunes an absent child-only name when a ceiling denies extensions", () => {
+			const plan = resolvePiLaunchToolPlan({
+				tools: ["read", "fixture_search"],
+				hostToolNames: ["read"],
+				subagentOnlyExtensions: ["./tools/fixture-search.ts"],
+				capabilityCeiling: { version: 1 as const, denyExtensions: true, sources: ["test"] },
+			});
+			assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
+		});
+
+		it("keeps persistent ambient package sources the runner rediscovers", () => {
+			for (const source of ["npm:pi-web-access", "git:github.com/acme/pi-web-access", "https://example.com/acme/pi-web-access.tar.gz", "../../dd/pi-web-access", "~/pi-web-access", "auto"]) {
+				const plan = resolvePiLaunchToolPlan({
+					tools: ["read", "web_search"],
+					hostToolNames: ["read", "web_search"],
+					hostToolSources: { read: "builtin", web_search: source },
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, ["read", "web_search"], source);
+			}
+		});
+
+		it("prunes sdk and absolute-path sources from ambient inheritance", () => {
+			for (const source of ["sdk", "/abs/tmp/pi-web-access.ts"]) {
+				const plan = resolvePiLaunchToolPlan({
+					tools: ["read", "web_search"],
+					hostToolNames: ["read", "web_search"],
+					hostToolSources: { read: "builtin", web_search: source },
+				});
+				assert.deepEqual(plan.declaredBuiltinTools, ["read"], source);
+			}
+		});
 	});
 
 		describe("ambient and explicit extension loading", () => {
@@ -219,13 +271,31 @@ describe("child tool plan host builtin intersection", () => {
 						{ name: "web_search", sourceInfo: { source: "npm:pi-web-access" } },
 					],
 				};
-				assert.deepEqual(getHostToolSources(host), { read: "builtin", web_search: "npm:pi-web-access" });
+				const sources = getHostToolSources(host);
+				assert.deepEqual(Object.entries(sources ?? {}), [["read", "builtin"], ["web_search", "npm:pi-web-access"]]);
 			});
 
 			it("returns undefined when discovery fails or the host registers nothing", () => {
 				assert.equal(getHostToolSources({ getAllTools: () => [] }), undefined);
 				assert.equal(getHostToolSources({ getAllTools: () => { throw new Error("not ready"); } }), undefined);
 			});
+			it("stores arbitrary tool names as own properties", () => {
+				const host = {
+					getAllTools: () => [{ name: "__proto__", sourceInfo: { source: "npm:weird" } }],
+				};
+				const sources = getHostToolSources(host);
+				assert.equal(Object.getPrototypeOf(sources), null);
+				assert.equal(sources?.["__proto__"], "npm:weird");
+			});
+		});
+
+		it("plans a launch requesting a tool named __proto__ without crashing", () => {
+			const plan = resolvePiLaunchToolPlan({
+				tools: ["__proto__"],
+				hostToolNames: ["__proto__"],
+				hostToolSources: Object.assign(Object.create(null), { ["__proto__"]: "npm:weird" }),
+			});
+			assert.deepEqual(plan.effectiveToolAllowlist, ["__proto__"]);
 		});
 	it("fails when requireReadTool is true but host does not provide read", () => {
 		assert.throws(

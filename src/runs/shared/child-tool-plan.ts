@@ -403,7 +403,9 @@ export function getHostToolSources(pi: Pick<ExtensionAPI, "getAllTools">): Recor
 	try {
 		const tools = pi.getAllTools();
 		if (tools.length === 0) return undefined;
-		const sources: Record<string, string> = {};
+		// Tool names are arbitrary: a name like __proto__ must become an own
+		// property, not trigger the prototype setter.
+		const sources: Record<string, string> = Object.create(null);
 		for (const tool of tools) {
 			const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
 			if (source !== undefined) sources[tool.name] = source;
@@ -465,25 +467,38 @@ export function resolvePiLaunchToolPlan(
 	// (mcp__slack, web_search, ...) reach the child only from extensions it
 	// actually loads: the ambient set when the launch enables it (limited to
 	// sources the runner rediscovers on its own), or an extension the agent
-	// listed in `extensions` (matched against the host sources). Everything
-	// else stays pruned, so restricted launches fail closed.
+	// listed in `extensions` or `subagentOnlyExtensions` (matched against the
+	// host sources). A name the parent does not have can still resolve when
+	// the agent declares a child-only provider for it: the provider loads in
+	// the child and registers the name, and the startup registry check fails
+	// closed when it does not. Everything else stays pruned, so restricted
+	// launches fail closed.
 	const childLoadsAmbientExtensions = input.ambientExtensions !== false
 		&& capabilityCeiling?.denyExtensions !== true
 		&& input.extensions === undefined;
 	// A detached runner rebuilds its ambient set from its own settings and
-	// autoload discovery. It rediscovers packages and drop-in extensions but
-	// not the parent's temporary registrations (CLI --extension paths, SDK
-	// tools), so only rediscoverable sources survive ambient inheritance.
+	// autoload discovery. It rediscovers packages (npm, git, URL, and local
+	// specs) and drop-in extensions but not the parent's temporary
+	// registrations (CLI --extension paths, SDK tools), so only those sources
+	// survive ambient inheritance.
 	const ambientSourceRediscoverable = (source: string | undefined): boolean =>
-		source !== undefined && (source === "auto" || source.startsWith("npm:"));
+		source !== undefined && (/^(npm:|git:|https?:\/\/|file:)/i.test(source) || /^[~.]/.test(source) || source === "auto");
+	const childLoadsExplicitExtensions = capabilityCeiling?.denyExtensions !== true
+		&& Boolean(input.extensions?.length || input.subagentOnlyExtensions?.length);
 	const resolvesInChild = (tool: string): boolean => {
 		if (NATIVE_COORDINATION_TOOL_NAMES.has(tool)) return true;
-		if (hostAvailableSet === undefined || !hostAvailableSet.has(tool)) return false;
-		if (PI_BUILTIN_TOOL_NAMES.has(tool)) return true;
-		const source = input.hostToolSources?.[tool];
-		if (childLoadsAmbientExtensions && ambientSourceRediscoverable(source)) return true;
-		if (source === undefined || capabilityCeiling?.denyExtensions === true) return false;
-		return (input.extensions ?? []).some((spec) => extensionSourcesMatch(spec, source));
+		if (hostAvailableSet === undefined) return true;
+		if (PI_BUILTIN_TOOL_NAMES.has(tool)) return hostAvailableSet.has(tool);
+		if (hostAvailableSet.has(tool)) {
+			const source = input.hostToolSources?.[tool];
+			if (childLoadsAmbientExtensions && ambientSourceRediscoverable(source)) return true;
+			if (childLoadsExplicitExtensions && source !== undefined
+				&& (input.extensions ?? []).some((spec) => extensionSourcesMatch(spec, source))) return true;
+			return false;
+		}
+		// Absent from the parent registry: a child-only extension provider may
+		// still register the name at startup.
+		return childLoadsExplicitExtensions;
 	};
 	const declaredBuiltinTools = hostAvailableSet === undefined
 		? ceilingFilteredBuiltinTools
