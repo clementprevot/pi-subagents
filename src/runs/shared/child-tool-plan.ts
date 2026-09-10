@@ -202,7 +202,7 @@ export interface ResolvePiLaunchToolPlanInput {
 	 * that provides it in `extensions`, and prune names whose provider the child
 	 * will not load.
 	 */
-	hostToolSources?: Record<string, string>;
+	hostToolSources?: Record<string, readonly string[]>;
 	/**
 	 * Whether the child launch loads ambient extensions. Foreground launches
 	 * hosted by the parent process never do (buildInProcessChildLaunch derives
@@ -391,31 +391,36 @@ export function getHostToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[
 }
 
 /**
- * Map every registered tool name to its `sourceInfo.source`. Pass this as
- * `hostToolSources` alongside `hostToolNames` so child tool plans can tell
- * which extension provides a requested tool name and keep the ones the
- * agent listed in `extensions`.
+ * Map every registered tool name to the identity strings its registration
+ * carries: the `sourceInfo.source` plus the provider `path` when one is
+ * recorded (auto-discovered extensions report source "auto" and carry the
+ * provider path separately). Pass this as `hostToolSources` alongside
+ * `hostToolNames` so child tool plans can tell which extension provides a
+ * requested tool name and keep the ones the agent listed in `extensions` or
+ * `subagentOnlyExtensions`.
  *
  * Returns `undefined` when discovery fails or yields nothing (same contract
  * as `getHostToolNames`).
  */
-export function getHostToolSources(pi: Pick<ExtensionAPI, "getAllTools">): Record<string, string> | undefined {
+export function getHostToolSources(pi: Pick<ExtensionAPI, "getAllTools">): Record<string, readonly string[]> | undefined {
 	try {
 		const tools = pi.getAllTools();
 		if (tools.length === 0) return undefined;
 		// Tool names are arbitrary: a name like __proto__ must become an own
 		// property, not trigger the prototype setter.
-		const sources: Record<string, string> = Object.create(null);
+		const sources: Record<string, readonly string[]> = Object.create(null);
 		for (const tool of tools) {
-			const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
-			if (source !== undefined) sources[tool.name] = source;
+			const info = tool.sourceInfo as { source?: string; path?: string } | undefined;
+			if (info?.source === undefined) continue;
+			const identities = [info.source];
+			if (info.path !== undefined && info.path !== info.source) identities.push(info.path);
+			sources[tool.name] = identities;
 		}
 		return sources;
 	} catch {
 		return undefined;
 	}
 }
-
 export function resolvePiLaunchToolPlan(
 	input: ResolvePiLaunchToolPlanInput,
 ): PiLaunchToolPlan {
@@ -490,10 +495,11 @@ export function resolvePiLaunchToolPlan(
 		if (hostAvailableSet === undefined) return true;
 		if (PI_BUILTIN_TOOL_NAMES.has(tool)) return hostAvailableSet.has(tool);
 		if (hostAvailableSet.has(tool)) {
-			const source = input.hostToolSources?.[tool];
-			if (childLoadsAmbientExtensions && ambientSourceRediscoverable(source)) return true;
-			if (childLoadsExplicitExtensions && source !== undefined
-				&& (input.extensions ?? []).some((spec) => extensionSourcesMatch(spec, source))) return true;
+			const identities = input.hostToolSources?.[tool];
+			if (childLoadsAmbientExtensions && ambientSourceRediscoverable(identities?.[0])) return true;
+			if (childLoadsExplicitExtensions && identities !== undefined
+				&& [...(input.extensions ?? []), ...(input.subagentOnlyExtensions ?? [])]
+					.some((spec) => identities.some((candidate) => extensionSourcesMatch(spec, candidate)))) return true;
 			return false;
 		}
 		// Absent from the parent registry: a child-only extension provider may
@@ -586,9 +592,12 @@ export function resolvePiLaunchToolPlan(
 		...(fanoutAuthorized ? [FANOUT_CHILD_EXTENSION_PATH] : []),
 		...(permSystemExt ? [permSystemExt] : []),
 	];
+	// Mirror the childLoadsAmbientExtensions decision so launch previews and
+	// contract digests report the ambient policy the launch will actually use.
 	const disableAmbientExtensions =
 		capabilityCeiling?.denyExtensions === true ||
-		input.extensions !== undefined;
+		input.extensions !== undefined ||
+		input.ambientExtensions === false;
 	const warnings: string[] = [];
 	// An explicit empty list disables ambient extensions, including model providers.
 	if (capabilityCeiling?.denyExtensions !== true && Array.isArray(input.extensions) && input.extensions.length === 0) {

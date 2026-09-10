@@ -96,10 +96,10 @@ describe("child tool plan host builtin intersection", () => {
 		const tools = ["read", "web_search", "fetch_content"];
 		const hostToolNames = ["read", "web_search", "fetch_content", "source_check"];
 		const hostToolSources = {
-			read: "builtin",
-			web_search: "npm:pi-web-access",
-			fetch_content: "npm:pi-web-access",
-			source_check: "npm:pi-web-access",
+			read: ["builtin"],
+			web_search: ["npm:pi-web-access"],
+			fetch_content: ["npm:pi-web-access"],
+			source_check: ["npm:pi-web-access"],
 		};
 
 		it("keeps core tool names a package wrapper shadows", () => {
@@ -124,7 +124,7 @@ describe("child tool plan host builtin intersection", () => {
 			const plan = resolvePiLaunchToolPlan({
 				tools: ["read", "temp_tool"],
 				hostToolNames: ["read", "temp_tool"],
-				hostToolSources: { read: "builtin", temp_tool: "/tmp/parent-only.ts" },
+				hostToolSources: { read: ["builtin"], temp_tool: ["/tmp/parent-only.ts"] },
 			});
 			assert.deepEqual(plan.declaredBuiltinTools, ["read"]);
 			assert.deepEqual(plan.unavailableHostBuiltins, ["temp_tool"]);
@@ -187,7 +187,7 @@ describe("child tool plan host builtin intersection", () => {
 				const plan = resolvePiLaunchToolPlan({
 					tools: ["read", "web_search"],
 					hostToolNames: ["read", "web_search"],
-					hostToolSources: { read: "builtin", web_search: source },
+					hostToolSources: { read: ["builtin"], web_search: [source] },
 				});
 				assert.deepEqual(plan.declaredBuiltinTools, ["read", "web_search"], source);
 			}
@@ -198,7 +198,7 @@ describe("child tool plan host builtin intersection", () => {
 				const plan = resolvePiLaunchToolPlan({
 					tools: ["read", "web_search"],
 					hostToolNames: ["read", "web_search"],
-					hostToolSources: { read: "builtin", web_search: source },
+					hostToolSources: { read: ["builtin"], web_search: [source] },
 				});
 				assert.deepEqual(plan.declaredBuiltinTools, ["read"], source);
 			}
@@ -208,7 +208,7 @@ describe("child tool plan host builtin intersection", () => {
 		describe("ambient and explicit extension loading", () => {
 			const tools = ["read", "web_search", "fetch_content"];
 			const hostToolNames = ["read", "web_search", "fetch_content"];
-			const hostToolSources = { read: "builtin", web_search: "npm:pi-web-access", fetch_content: "npm:pi-web-access" };
+			const hostToolSources = { read: ["builtin"], web_search: ["npm:pi-web-access"], fetch_content: ["npm:pi-web-access"] };
 
 			it("prunes extension tool names for a foreground launch that never loads ambient extensions", () => {
 				const plan = resolvePiLaunchToolPlan({ tools, hostToolNames, ambientExtensions: false });
@@ -232,7 +232,7 @@ describe("child tool plan host builtin intersection", () => {
 				const plan = resolvePiLaunchToolPlan({
 					tools,
 					hostToolNames,
-					hostToolSources: { ...hostToolSources, web_search: "/ext/pi-web-access/dist/index.js", fetch_content: "/ext/pi-web-access/dist/index.js" },
+					hostToolSources: { ...hostToolSources, web_search: ["/ext/pi-web-access/dist/index.js"], fetch_content: ["/ext/pi-web-access/dist/index.js"] },
 					extensions: ["/ext/pi-web-access/dist/index.js"],
 					ambientExtensions: false,
 				});
@@ -272,7 +272,7 @@ describe("child tool plan host builtin intersection", () => {
 					],
 				};
 				const sources = getHostToolSources(host);
-				assert.deepEqual(Object.entries(sources ?? {}), [["read", "builtin"], ["web_search", "npm:pi-web-access"]]);
+				assert.deepEqual(Object.entries(sources ?? {}), [["read", ["builtin"]], ["web_search", ["npm:pi-web-access"]]]);
 			});
 
 			it("returns undefined when discovery fails or the host registers nothing", () => {
@@ -285,7 +285,7 @@ describe("child tool plan host builtin intersection", () => {
 				};
 				const sources = getHostToolSources(host);
 				assert.equal(Object.getPrototypeOf(sources), null);
-				assert.equal(sources?.["__proto__"], "npm:weird");
+				assert.deepEqual(sources?.["__proto__"], ["npm:weird"]);
 			});
 		});
 
@@ -293,7 +293,7 @@ describe("child tool plan host builtin intersection", () => {
 			const plan = resolvePiLaunchToolPlan({
 				tools: ["__proto__"],
 				hostToolNames: ["__proto__"],
-				hostToolSources: Object.assign(Object.create(null), { ["__proto__"]: "npm:weird" }),
+				hostToolSources: Object.assign(Object.create(null), { ["__proto__"]: ["npm:weird"] }),
 			});
 			assert.deepEqual(plan.effectiveToolAllowlist, ["__proto__"]);
 		});

@@ -2444,7 +2444,7 @@ export interface RunSyncOptions {
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostToolNames?: readonly string[];
 	/** Tool name to `sourceInfo.source` for the same host registry. */
-	hostToolSources?: Record<string, string>;
+	hostToolSources?: Record<string, readonly string[]>;
 	/** Optional subagent model-scope enforcement for fallback candidates */
 	modelScope?: ModelScopeRule | ModelScopeRule[];
 	/** Skills to make available (overrides agent default if provided) */

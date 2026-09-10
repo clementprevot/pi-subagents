@@ -120,7 +120,9 @@ export interface BuildInProcessChildLaunchInput {
 	 */
 	hostToolNames?: readonly string[];
 	/** Tool name to `sourceInfo.source` for the same host registry. */
-	hostToolSources?: Record<string, string>;
+	hostToolSources?: Record<string, readonly string[]>;
+	/** Whether the child loads ambient extensions (foreground parent-hosted children never do). */
+	ambientExtensions?: boolean;
 }
 
 export interface InProcessChildCapture {
@@ -205,8 +207,9 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		hostToolNames: input.hostToolNames,
 		hostToolSources: input.hostToolSources,
 		// Parent-hosted (foreground) children never load ambient extensions; the
-		// detached runner does when the extension policy allows it.
-		ambientExtensions: input.host === "runner",
+		// detached runner does when the extension policy allows it and its caller
+		// has not disabled ambient inheritance for this launch.
+		ambientExtensions: input.host === "runner" && input.ambientExtensions !== false,
 	});
 
 	const inherited = input.inherited;

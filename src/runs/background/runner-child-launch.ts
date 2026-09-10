@@ -19,7 +19,9 @@ export interface RunnerChildLaunchContext {
 	capabilityCeiling?: BuildInProcessChildLaunchInput["capabilityCeiling"];
 	inheritedChildRuntime?: InheritedChildRuntime;
 	hostToolNames?: readonly string[];
-	hostToolSources?: Record<string, string>;
+	hostToolSources?: Record<string, readonly string[]>;
+	/** Whether the runner-hosted child loads ambient extensions (cwd-dependent). */
+	ambientExtensions?: boolean;
 }
 
 export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChildLaunchContext, attempt: {
@@ -85,6 +87,7 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		inherited: ctx.inheritedChildRuntime,
 		hostToolNames: ctx.hostToolNames,
 		hostToolSources: ctx.hostToolSources,
+		ambientExtensions: ctx.ambientExtensions,
 		host: "runner",
 	});
 }

@@ -785,6 +785,10 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
+	// Ambient discovery in the runner happens in the runner cwd: only trust
+	// the parent registry snapshot for ambient names when the child stays in
+	// the parent's project; cross-project launches fail closed instead.
+	const ambientExtensions = runnerCwd === ctx.cwd;
 	let managedWorktreeProvider: "native" | "worktrunk" | undefined;
 	try {
 		if (chain.some((step) => "worktree" in step && step.worktree === true)) {
@@ -985,6 +989,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			runtimeSnapshotHost: ctx.pi,
 			hostToolNames,
 			hostToolSources,
+			ambientExtensions,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -1383,6 +1388,7 @@ export function executeAsyncChain(
 				runFanoutBudget,
 				hostToolNames: getHostToolNames(ctx.pi),
 				hostToolSources: getHostToolSources(ctx.pi),
+				ambientExtensions: runnerCwd === ctx.cwd,
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1617,6 +1623,10 @@ export function executeAsyncSingle(
 		return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 	}
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
+	// Ambient discovery in the runner happens in the runner cwd: only trust
+	// the parent registry snapshot for ambient names when the child stays in
+	// the parent's project; cross-project launches fail closed instead.
+	const ambientExtensions = runnerCwd === ctx.cwd;
 	let managedWorktreeProvider: "native" | "worktrunk" | undefined;
 	if (params.worktree === true) {
 		try {
@@ -1777,6 +1787,7 @@ export function executeAsyncSingle(
 		runtimeSnapshotHost: ctx.pi,
 		hostToolNames,
 		hostToolSources,
+		ambientExtensions,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {
@@ -1983,6 +1994,7 @@ export function executeAsyncSingle(
 				runFanoutBudget,
 				hostToolNames,
 				hostToolSources,
+				ambientExtensions,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(lane ? { lane } : {}),
